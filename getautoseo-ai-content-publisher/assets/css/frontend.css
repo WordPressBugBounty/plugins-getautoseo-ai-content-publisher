@@ -1,0 +1,53 @@
+/**
+ * AutoSEO Frontend Styles for Infographics
+ * 
+ * These styles provide fallback and enhancement for infographics
+ * in case Tailwind CSS doesn't load properly
+ */
+
+.autoseo-infographic-wrapper {
+    margin: 40px 0;
+    clear: both;
+    overflow: hidden;
+}
+
+.autoseo-infographic-container {
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+}
+
+/* Ensure infographics are responsive */
+.autoseo-infographic-container img {
+    max-width: 100%;
+    height: auto;
+}
+
+/* Ensure SVG icons render properly */
+.autoseo-infographic-container svg {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+/* Basic table styling for comparison tables in infographics */
+.autoseo-infographic-container table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.autoseo-infographic-container table th,
+.autoseo-infographic-container table td {
+    padding: 12px;
+    text-align: left;
+}
+
+/* Ensure proper spacing for infographic sections */
+.autoseo-infographic-container > div {
+    margin-bottom: 1rem;
+}
+
+/* Print styles - ensure infographics print nicely */
+@media print {
+    .autoseo-infographic-wrapper {
+        page-break-inside: avoid;
+    }
+}
+

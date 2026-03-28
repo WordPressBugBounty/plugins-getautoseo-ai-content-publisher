@@ -1,0 +1,445 @@
+# AutoSEO WordPress Plugin
+# Copyright (C) 2024 AutoSEO Team
+# This file is distributed under the GPL v2 or later.
+msgid ""
+msgstr ""
+"Project-Id-Version: AutoSEO 1.0.0\n"
+"Report-Msgid-Bugs-To: https://getautoseo.com/support\n"
+"POT-Creation-Date: 2024-09-16 12:00+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+# Plugin Name
+msgid "AutoSEO"
+msgstr ""
+
+# Plugin Description
+msgid "Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site."
+msgstr ""
+
+# Admin Interface
+msgid "AutoSEO Dashboard"
+msgstr ""
+
+msgid "AutoSEO Settings"
+msgstr ""
+
+msgid "API Configuration"
+msgstr ""
+
+msgid "Publishing Settings"
+msgstr ""
+
+msgid "Advanced"
+msgstr ""
+
+msgid "Dashboard"
+msgstr ""
+
+msgid "Articles"
+msgstr ""
+
+msgid "Settings"
+msgstr ""
+
+# API Settings
+msgid "API Key"
+msgstr ""
+
+msgid "Your AutoSEO API Key"
+msgstr ""
+
+msgid "API Base URL"
+msgstr ""
+
+msgid "Usually no need to change this unless instructed by AutoSEO support."
+msgstr ""
+
+# Publishing Settings
+msgid "Auto-Publish Articles"
+msgstr ""
+
+msgid "Automatically publish articles when synced from AutoSEO"
+msgstr ""
+
+msgid "Default Post Status"
+msgstr ""
+
+msgid "Draft"
+msgstr ""
+
+msgid "Published"
+msgstr ""
+
+msgid "Private"
+msgstr ""
+
+msgid "Pending Review"
+msgstr ""
+
+msgid "Default Category"
+msgstr ""
+
+msgid "Select Category"
+msgstr ""
+
+msgid "Default Author"
+msgstr ""
+
+msgid "Select Author"
+msgstr ""
+
+# Actions
+msgid "Sync Articles"
+msgstr ""
+
+msgid "Test Connection"
+msgstr ""
+
+msgid "Publish"
+msgstr ""
+
+msgid "View"
+msgstr ""
+
+msgid "Edit"
+msgstr ""
+
+msgid "Delete"
+msgstr ""
+
+msgid "Save Settings"
+msgstr ""
+
+msgid "Save Publishing Settings"
+msgstr ""
+
+# Messages
+msgid "Connection successful!"
+msgstr ""
+
+msgid "Connection failed"
+msgstr ""
+
+msgid "Articles synced successfully!"
+msgstr ""
+
+msgid "Article published successfully!"
+msgstr ""
+
+msgid "Settings saved successfully!"
+msgstr ""
+
+msgid "Failed to save settings"
+msgstr ""
+
+msgid "Please configure your API key in the settings page to start using AutoSEO."
+msgstr ""
+
+msgid "No articles found"
+msgstr ""
+
+msgid "No articles have been synced yet."
+msgstr ""
+
+msgid "Sync your first articles"
+msgstr ""
+
+msgid "Are you sure you want to publish this article?"
+msgstr ""
+
+msgid "Are you sure you want to delete this article? This action cannot be undone."
+msgstr ""
+
+# Statistics
+msgid "Total Articles"
+msgstr ""
+
+msgid "Published"
+msgstr ""
+
+msgid "Pending"
+msgstr ""
+
+msgid "Last Sync"
+msgstr ""
+
+msgid "Recent Articles"
+msgstr ""
+
+msgid "Title"
+msgstr ""
+
+msgid "Status"
+msgstr ""
+
+msgid "Word Count"
+msgstr ""
+
+msgid "Search Terms"
+msgstr ""
+
+msgid "Synced"
+msgstr ""
+
+msgid "Published"
+msgstr ""
+
+msgid "Actions"
+msgstr ""
+
+# Advanced Settings
+msgid "Advanced Configuration"
+msgstr ""
+
+msgid "System Information"
+msgstr ""
+
+msgid "Plugin Version"
+msgstr ""
+
+msgid "WordPress Version"
+msgstr ""
+
+msgid "PHP Version"
+msgstr ""
+
+msgid "Debug Information"
+msgstr ""
+
+msgid "Enable debug logging"
+msgstr ""
+
+msgid "Log File Location"
+msgstr ""
+
+msgid "Maintenance Actions"
+msgstr ""
+
+msgid "Clear Sync Data"
+msgstr ""
+
+msgid "Reset All Settings"
+msgstr ""
+
+msgid "Export Settings"
+msgstr ""
+
+# Status Messages
+msgid "Testing..."
+msgstr ""
+
+msgid "Syncing..."
+msgstr ""
+
+msgid "Publishing..."
+msgstr ""
+
+msgid "Connecting..."
+msgstr ""
+
+msgid "Connected!"
+msgstr ""
+
+msgid "Error occurred"
+msgstr ""
+
+# Time
+msgid "ago"
+msgstr ""
+
+msgid "Never"
+msgstr ""
+
+# Meta
+msgid "Get your API key from your AutoSEO dashboard."
+msgstr ""
+
+msgid "Default status for articles when they are published to WordPress."
+msgstr ""
+
+msgid "Default category for AutoSEO articles."
+msgstr ""
+
+msgid "Default author for AutoSEO articles."
+msgstr ""
+
+msgid "Configure your AutoSEO API connection settings."
+msgstr ""
+
+msgid "Configure how articles from AutoSEO should be published on your site."
+msgstr ""
+
+# Bulk Actions
+msgid "Bulk Actions"
+msgstr ""
+
+msgid "Apply"
+msgstr ""
+
+msgid "Select All"
+msgstr ""
+
+# Pagination
+msgid "« Previous"
+msgstr ""
+
+msgid "Next »"
+msgstr ""
+
+# Modal
+msgid "Article Details"
+msgstr ""
+
+msgid "Close"
+msgstr ""
+
+# Errors
+msgid "API key is not configured."
+msgstr ""
+
+msgid "API authentication failed. Please check your API key."
+msgstr ""
+
+msgid "API access forbidden. Your account may not have the required permissions."
+msgstr ""
+
+msgid "API endpoint not found."
+msgstr ""
+
+msgid "Validation error from API."
+msgstr ""
+
+msgid "API rate limit exceeded. Please try again later."
+msgstr ""
+
+msgid "AutoSEO API is temporarily unavailable. Please try again later."
+msgstr ""
+
+msgid "Failed to publish article."
+msgstr ""
+
+msgid "Article not found."
+msgstr ""
+
+msgid "Article is already published."
+msgstr ""
+
+msgid "Insufficient permissions"
+msgstr ""
+
+# Success
+msgid "Article synced successfully"
+msgstr ""
+
+msgid "Articles synced successfully"
+msgstr ""
+
+msgid "Article published successfully"
+msgstr ""
+
+msgid "Settings updated successfully"
+msgstr ""
+
+# Warnings
+msgid "This action cannot be undone."
+msgstr ""
+
+msgid "Please select articles to publish."
+msgstr ""
+
+# Info
+msgid "Copied!"
+msgstr ""
+
+msgid "Use this key to integrate AutoSEO with external tools"
+msgstr ""
+
+msgid "This will invalidate your current API key"
+msgstr ""
+
+# Help Text
+msgid "Configure your connection to the AutoSEO platform"
+msgstr ""
+
+msgid "Set up how articles should be published on your site"
+msgstr ""
+
+msgid "Advanced options for power users"
+msgstr ""
+
+msgid "Get your API key from your AutoSEO account dashboard"
+msgstr ""
+
+msgid "The base URL for the AutoSEO API"
+msgstr ""
+
+msgid "Enable to automatically publish articles when synced"
+msgstr ""
+
+msgid "Choose the default status for new articles"
+msgstr ""
+
+msgid "Select the default category for articles"
+msgstr ""
+
+msgid "Choose the default author for articles"
+msgstr ""
+
+# Context-specific
+msgctxt "article status"
+msgid "Published"
+msgstr ""
+
+msgctxt "article status"
+msgid "Draft"
+msgstr ""
+
+msgctxt "article status"
+msgid "Pending"
+msgstr ""
+
+msgctxt "button"
+msgid "Publish"
+msgstr ""
+
+msgctxt "button"
+msgid "Save"
+msgstr ""
+
+msgctxt "button"
+msgid "Cancel"
+msgstr ""
+
+msgctxt "navigation"
+msgid "Dashboard"
+msgstr ""
+
+msgctxt "navigation"
+msgid "Articles"
+msgstr ""
+
+msgctxt "navigation"
+msgid "Settings"
+msgstr ""
+
+# Plural forms
+msgid "article"
+msgid_plural "articles"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "search term"
+msgid_plural "search terms"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "sync"
+msgid_plural "syncs"
+msgstr[0] ""
+msgstr[1] ""

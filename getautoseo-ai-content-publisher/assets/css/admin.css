@@ -1,0 +1,645 @@
+/**
+ * AutoSEO Admin Styles
+ */
+
+.autoseo-admin-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px;
+    margin: -20px -20px 30px -20px;
+    border-radius: 8px;
+}
+
+.autoseo-admin-header h1 {
+    margin: 0;
+    font-size: 1.8em;
+    font-weight: 600;
+}
+
+.autoseo-admin-header p {
+    margin: 5px 0 0 0;
+    opacity: 0.9;
+    font-size: 1em;
+}
+
+.autoseo-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+.autoseo-stat-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.autoseo-stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.autoseo-stat-icon {
+    width: 50px;
+    height: 50px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 15px auto;
+    color: white;
+    font-size: 20px;
+}
+
+.autoseo-stat-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.autoseo-stat-number {
+    font-size: 2.5em;
+    font-weight: bold;
+    color: #1d2327;
+    margin-bottom: 5px;
+}
+
+.autoseo-stat-label {
+    color: #1d2327;
+    font-size: 1em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 5px;
+}
+
+.autoseo-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.autoseo-section-header h2 {
+    margin: 0;
+    color: #1d2327;
+    font-size: 1.5em;
+}
+
+.autoseo-section-header .autoseo-section-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.autoseo-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.autoseo-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.autoseo-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.autoseo-card-header {
+    padding: 20px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.autoseo-card-title {
+    margin: 0;
+    color: #1d2327;
+    font-size: 1.2em;
+    font-weight: 600;
+}
+
+.autoseo-card-subtitle {
+    margin: 5px 0 0 0;
+    color: #646970;
+    font-size: 0.9em;
+}
+
+.autoseo-card-content {
+    padding: 20px;
+}
+
+.autoseo-card-actions {
+    padding: 15px 20px;
+    background: #f8f9fa;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    gap: 10px;
+}
+
+.autoseo-status-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.autoseo-status-published {
+    background: #d4edda;
+    color: #155724;
+}
+
+.autoseo-status-draft {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.autoseo-status-pending {
+    background: #d1ecf1;
+    color: #0c5460;
+}
+
+.autoseo-status-error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.autoseo-loading {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #667eea;
+    border-radius: 50%;
+    animation: autoseo-spin 1s linear infinite;
+}
+
+@keyframes autoseo-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.autoseo-button-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-weight: 500;
+    text-decoration: none;
+    display: inline-block;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.autoseo-button-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+}
+
+.autoseo-button-secondary {
+    background: #f8f9fa;
+    color: #495057;
+    border: 1px solid #dee2e6;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-weight: 500;
+    text-decoration: none;
+    display: inline-block;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.autoseo-button-secondary:hover {
+    background: #e9ecef;
+    border-color: #adb5bd;
+}
+
+.autoseo-form-group {
+    margin-bottom: 20px;
+}
+
+.autoseo-form-group label {
+    display: block;
+    margin-bottom: 5px;
+    color: #1d2327;
+    font-weight: 500;
+}
+
+.autoseo-form-group input[type="text"],
+.autoseo-form-group input[type="password"],
+.autoseo-form-group input[type="url"],
+.autoseo-form-group select,
+.autoseo-form-group textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.autoseo-form-group input[type="text"]:focus,
+.autoseo-form-group input[type="password"]:focus,
+.autoseo-form-group input[type="url"]:focus,
+.autoseo-form-group select:focus,
+.autoseo-form-group textarea:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+.autoseo-form-group .description {
+    margin-top: 5px;
+    color: #6c757d;
+    font-size: 13px;
+}
+
+.autoseo-notice {
+    padding: 15px 20px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    border-left: 4px solid;
+}
+
+.autoseo-notice-success {
+    background: #d4edda;
+    border-left-color: #28a745;
+    color: #155724;
+}
+
+.autoseo-notice-error {
+    background: #f8d7da;
+    border-left-color: #dc3545;
+    color: #721c24;
+}
+
+.autoseo-notice-warning {
+    background: #fff3cd;
+    border-left-color: #ffc107;
+    color: #856404;
+}
+
+.autoseo-notice-info {
+    background: #d1ecf1;
+    border-left-color: #17a2b8;
+    color: #0c5460;
+}
+
+.autoseo-table-responsive {
+    overflow-x: auto;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+}
+
+.autoseo-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.autoseo-table th,
+.autoseo-table td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.autoseo-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #1d2327;
+}
+
+.autoseo-table tbody tr:hover {
+    background: #f8f9fa;
+}
+
+.autoseo-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.autoseo-modal.show {
+    opacity: 1;
+    visibility: visible;
+}
+
+.autoseo-modal-content {
+    background: #fff;
+    border-radius: 8px;
+    max-width: 600px;
+    width: 90%;
+    max-height: 80vh;
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    transform: scale(0.9);
+    transition: transform 0.3s ease;
+}
+
+.autoseo-modal.show .autoseo-modal-content {
+    transform: scale(1);
+}
+
+.autoseo-modal-header {
+    padding: 20px 25px;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.autoseo-modal-header h2 {
+    margin: 0;
+    color: #1d2327;
+    font-size: 1.5em;
+}
+
+.autoseo-modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #6c757d;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: background-color 0.2s ease;
+}
+
+.autoseo-modal-close:hover {
+    background: #f8f9fa;
+}
+
+.autoseo-modal-body {
+    padding: 20px 25px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.autoseo-modal-footer {
+    padding: 15px 25px;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    background: #f8f9fa;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .autoseo-stats-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .autoseo-cards-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .autoseo-admin-header {
+        margin: -10px -10px 20px -10px;
+        padding: 15px;
+    }
+
+    .autoseo-admin-header h1 {
+        font-size: 1.5em;
+    }
+
+    .autoseo-section-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .autoseo-card-actions {
+        flex-direction: column;
+    }
+
+    .autoseo-modal-content {
+        width: 95%;
+        margin: 20px;
+    }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    .autoseo-stat-card,
+    .autoseo-card {
+        background: #2d3748;
+        border-color: #4a5568;
+        color: #e2e8f0;
+    }
+
+    .autoseo-stat-label {
+        color: #a0aec0;
+    }
+
+    .autoseo-card-header {
+        background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%);
+    }
+
+    .autoseo-card-title {
+        color: #e2e8f0;
+    }
+
+    .autoseo-card-subtitle {
+        color: #a0aec0;
+    }
+
+    .autoseo-card-actions {
+        background: #2d3748;
+        border-color: #4a5568;
+    }
+}
+
+/* Dashboard Page Styles */
+.autoseo-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.autoseo-title h1 {
+    margin: 0;
+    color: #1d2327;
+    font-size: 2em;
+}
+
+.autoseo-empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+}
+
+.autoseo-empty-icon {
+    font-size: 4em;
+    color: #c3c4c7;
+    margin-bottom: 20px;
+}
+
+.autoseo-empty-state h3 {
+    margin: 0 0 10px 0;
+    color: #1d2327;
+}
+
+.autoseo-empty-state p {
+    color: #646970;
+    margin-bottom: 20px;
+}
+
+.autoseo-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.autoseo-status {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+
+.autoseo-articles-table {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* Quick Actions uses the same .autoseo-stats-grid as stats section */
+
+/* Notification Bar Styles */
+.autoseo-sync-notice,
+.autoseo-cron-notice {
+    border-left-width: 4px;
+    padding: 0 !important;
+}
+
+.autoseo-notification-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+    padding: 15px 20px;
+}
+
+.autoseo-notification-icon {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 20px;
+}
+
+.autoseo-sync-notice .autoseo-notification-icon {
+    background: #fcf3cf;
+    color: #f39c12;
+}
+
+.autoseo-cron-notice .autoseo-notification-icon {
+    background: #fadbd8;
+    color: #e74c3c;
+}
+
+.autoseo-notification-message {
+    flex: 1;
+}
+
+.autoseo-notification-message p {
+    margin: 0.5em 0;
+}
+
+.autoseo-notification-message p:first-child {
+    margin-top: 0;
+}
+
+.autoseo-notification-message ul {
+    margin: 10px 0;
+}
+
+.autoseo-notification-actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    padding-top: 2px;
+}
+
+.autoseo-sync-now-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: all 0.2s ease;
+}
+
+.autoseo-sync-now-btn .dashicons {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+.autoseo-sync-now-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.autoseo-sync-now-btn.syncing .dashicons {
+    animation: autoseo-spin 1s linear infinite;
+}
+
+/* Responsive adjustments for notifications */
+@media (max-width: 782px) {
+    .autoseo-notification-content {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .autoseo-notification-actions {
+        width: 100%;
+    }
+
+    .autoseo-sync-now-btn {
+        width: 100%;
+        justify-content: center;
+    }
+}

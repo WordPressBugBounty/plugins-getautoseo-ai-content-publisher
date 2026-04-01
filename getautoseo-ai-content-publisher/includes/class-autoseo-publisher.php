@@ -364,6 +364,7 @@ class AutoSEO_Publisher {
             if ($hero_image_url) {
                 update_post_meta($post_id, '_autoseo_hero_image_url', $hero_image_url);
             }
+            update_post_meta($post_id, '_autoseo_hero_attachment_id', $featured_image_id);
         }
 
         // Handle infographic image (download and attach to post)
@@ -395,6 +396,9 @@ class AutoSEO_Publisher {
         if (!empty($article->infographic_html)) {
             update_post_meta($post_id, '_autoseo_infographic_html', $article->infographic_html);
         }
+
+        // Bake infographic into post_content so it doesn't depend on the_content filter
+        $this->bake_infographic_into_content($post_id);
 
         // Store keywords as post meta
         if (!empty($article->keywords)) {
@@ -461,6 +465,98 @@ class AutoSEO_Publisher {
             'post_id' => $post_id,
             'published_url' => $published_url,
         );
+    }
+
+    /**
+     * Bake infographic image directly into post_content so it doesn't depend
+     * on the_content filter injection (which some themes/page-builders break).
+     *
+     * The the_content filter (inject_infographic_image_into_content) remains as
+     * a backward-compatible fallback — it checks for 'autoseo-infographic-container'
+     * in the content and skips if already present.
+     */
+    public function bake_infographic_into_content($post_id) {
+        $infographic_image_id = get_post_meta($post_id, '_autoseo_infographic_image_id', true);
+        if (empty($infographic_image_id)) {
+            return;
+        }
+
+        if (!wp_get_attachment_url($infographic_image_id)) {
+            return;
+        }
+
+        $post = get_post($post_id);
+        if (!$post || empty($post->post_content)) {
+            return;
+        }
+
+        $content = $post->post_content;
+
+        // Strip any previously baked infographic so we can re-position it
+        // if the article content changed during a sync update.
+        // Try comment-wrapped version first (robust against nested divs from
+        // lazy-loading plugins), then fall back to bare-div regex.
+        $content = preg_replace(
+            '/<!-- autoseo-infographic -->.*?<!-- \/autoseo-infographic -->\s*/s',
+            '',
+            $content
+        );
+        $content = preg_replace(
+            '/<div class="autoseo-infographic-container">.*?<\/div>\s*/s',
+            '',
+            $content
+        );
+
+        // Safety: if the class still appears after stripping (e.g. nested-div
+        // edge case), skip injection to avoid duplicates.
+        if (strpos($content, 'autoseo-infographic-container') !== false) {
+            $this->log_debug(sprintf(
+                'Skipped baking infographic for post %d - container class still present after strip',
+                $post_id
+            ));
+            return;
+        }
+
+        $infographic_alt = get_post_meta($infographic_image_id, '_wp_attachment_image_alt', true);
+        if (empty($infographic_alt)) {
+            $infographic_alt = $post->post_title;
+        }
+
+        $infographic_html = wp_get_attachment_image($infographic_image_id, 'full', false, array(
+            'class' => 'autoseo-infographic-image',
+            'alt'   => $infographic_alt,
+        ));
+
+        if (empty($infographic_html)) {
+            return;
+        }
+
+        // Comment markers make future stripping reliable regardless of
+        // nested HTML from lazy-loading or image-optimization plugins.
+        $infographic_block = '<!-- autoseo-infographic -->'
+            . '<div class="autoseo-infographic-container">' . $infographic_html . '</div>'
+            . '<!-- /autoseo-infographic -->';
+
+        // Insert before the middle H2 heading (same logic as the_content filter)
+        preg_match_all('/<h2[^>]*>.*?<\/h2>/is', $content, $matches, PREG_OFFSET_CAPTURE);
+
+        if (empty($matches[0])) {
+            $content .= $infographic_block;
+        } else {
+            $headings = $matches[0];
+            $middle_index = (int) floor(count($headings) / 2);
+            $insert_position = $headings[$middle_index][1];
+            $content = substr($content, 0, $insert_position)
+                     . $infographic_block
+                     . substr($content, $insert_position);
+        }
+
+        wp_update_post(array(
+            'ID'           => $post_id,
+            'post_content' => $content,
+        ));
+
+        $this->log_debug(sprintf('Baked infographic into post_content for post %d', $post_id));
     }
 
     /**
@@ -696,6 +792,7 @@ class AutoSEO_Publisher {
                     $has_featured_image = false;
                     delete_post_meta($existing_post->ID, '_thumbnail_id');
                     delete_post_meta($existing_post->ID, '_autoseo_hero_image_url');
+                    delete_post_meta($existing_post->ID, '_autoseo_hero_attachment_id');
                     $current_hero_url = '';
                     $this->log_debug(sprintf(
                         'Hero image attachment %d for post %d is missing/deleted - will re-download',
@@ -705,9 +802,6 @@ class AutoSEO_Publisher {
                 }
             }
             
-            // Determine if we should download the hero image
-            // IMPORTANT: For posts created before v1.3.5, the meta won't exist
-            // In that case, if thumbnail already exists, DON'T download - just store the URL
             $should_download_hero = false;
             
             if (!empty($new_hero_url)) {
@@ -726,17 +820,46 @@ class AutoSEO_Publisher {
                         $new_hero_url
                     ));
                 } elseif (empty($current_hero_url) && $has_featured_image) {
-                    update_post_meta($existing_post->ID, '_autoseo_hero_image_url', $new_hero_url);
+                    // Post has a featured image but no AutoSEO tracking URL.
+                    // The existing thumbnail may have been set by the WordPress theme,
+                    // another plugin, or from a pre-existing post matched by title —
+                    // not necessarily the correct AutoSEO hero image.
+                    // Re-download to ensure the correct hero image is used.
+                    $should_download_hero = true;
                     $this->log_debug(sprintf(
-                        'Skipping hero image download for post %d - thumbnail exists (pre-v1.3.5 post), storing URL for future tracking',
+                        'Hero image download needed for post %d - featured image exists but no AutoSEO tracking URL (ensuring correct hero image)',
                         $existing_post->ID
                     ));
                 } else {
-                    $this->log_debug(sprintf(
-                        'Skipping hero image download for post %d - URL unchanged ("%s")',
-                        $existing_post->ID,
-                        $new_hero_url
-                    ));
+                    // URL unchanged — verify the thumbnail was actually set by AutoSEO.
+                    $autoseo_attachment_id = get_post_meta($existing_post->ID, '_autoseo_hero_attachment_id', true);
+                    $current_thumbnail_id = get_post_thumbnail_id($existing_post->ID);
+                    if (empty($autoseo_attachment_id)) {
+                        // Legacy post — no tracking yet (pre-fix). Re-download once to
+                        // ensure the thumbnail is actually our hero image and set tracking.
+                        $should_download_hero = true;
+                        $this->log_debug(sprintf(
+                            'Hero image re-download needed for post %d - URL tracked but no verified attachment (legacy post)',
+                            $existing_post->ID
+                        ));
+                    } elseif ((int) $autoseo_attachment_id !== (int) $current_thumbnail_id) {
+                        // AutoSEO set the thumbnail, but it was changed afterward
+                        // (user manually changed it in WP or a plugin swapped it).
+                        // Respect the change — update tracking to match current thumbnail.
+                        update_post_meta($existing_post->ID, '_autoseo_hero_attachment_id', $current_thumbnail_id);
+                        $this->log_debug(sprintf(
+                            'Hero image thumbnail changed externally for post %d - respecting change (was: %s, now: %s)',
+                            $existing_post->ID,
+                            $autoseo_attachment_id,
+                            $current_thumbnail_id
+                        ));
+                    } else {
+                        $this->log_debug(sprintf(
+                            'Skipping hero image download for post %d - URL unchanged and thumbnail verified ("%s")',
+                            $existing_post->ID,
+                            $new_hero_url
+                        ));
+                    }
                 }
             }
             
@@ -752,6 +875,7 @@ class AutoSEO_Publisher {
                 if ($featured_image_id) {
                     set_post_thumbnail($existing_post->ID, $featured_image_id);
                     update_post_meta($existing_post->ID, '_autoseo_hero_image_url', $new_hero_url);
+                    update_post_meta($existing_post->ID, '_autoseo_hero_attachment_id', $featured_image_id);
                 }
             } else {
                 // Even when not re-downloading, update alt text on existing attachment
@@ -855,6 +979,9 @@ class AutoSEO_Publisher {
         if (!empty($article->infographic_html)) {
             update_post_meta($existing_post->ID, '_autoseo_infographic_html', $article->infographic_html);
         }
+
+        // Bake infographic into post_content so it doesn't depend on the_content filter
+        $this->bake_infographic_into_content($existing_post->ID);
 
         // Update keywords
         if (!empty($article->keywords)) {

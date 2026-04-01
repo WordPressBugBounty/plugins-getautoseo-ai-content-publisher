@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.60
+ * Version: 1.3.61
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.60');
+define('AUTOSEO_VERSION', '1.3.61');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -2586,11 +2586,14 @@ class AutoSEO_Plugin {
         }
 
         // For hero images, skip if the post already has a valid featured image with the same URL
+        // AND the thumbnail was actually set by AutoSEO (verified via _autoseo_hero_attachment_id)
         if ($image_type === 'hero' && has_post_thumbnail($post_id)) {
             $current_url = get_post_meta($post_id, '_autoseo_hero_image_url', true);
             $thumbnail_id = get_post_thumbnail_id($post_id);
-            if ($current_url === $original_url && $thumbnail_id && wp_get_attachment_url($thumbnail_id)) {
-                $this->log_debug(sprintf('Push image: hero image already attached for post %d, skipping', $post_id));
+            $autoseo_attachment_id = get_post_meta($post_id, '_autoseo_hero_attachment_id', true);
+            $thumbnail_verified = !empty($autoseo_attachment_id) && (int) $autoseo_attachment_id === (int) $thumbnail_id;
+            if ($current_url === $original_url && $thumbnail_id && wp_get_attachment_url($thumbnail_id) && $thumbnail_verified) {
+                $this->log_debug(sprintf('Push image: hero image already attached and verified for post %d, skipping', $post_id));
                 return rest_ensure_response(array(
                     'success' => true,
                     'skipped' => true,
@@ -2657,6 +2660,7 @@ class AutoSEO_Plugin {
             if ($original_url) {
                 update_post_meta($post_id, '_autoseo_hero_image_url', $original_url);
             }
+            update_post_meta($post_id, '_autoseo_hero_attachment_id', $attachment_id);
             $this->log_debug(sprintf('Push image: set hero image (attachment %d) for post %d', $attachment_id, $post_id));
         } elseif ($image_type === 'infographic') {
             update_post_meta($post_id, '_autoseo_infographic_image_id', $attachment_id);
@@ -2664,6 +2668,9 @@ class AutoSEO_Plugin {
                 update_post_meta($post_id, '_autoseo_infographic_image_url', $original_url);
             }
             $this->log_debug(sprintf('Push image: set infographic (attachment %d) for post %d', $attachment_id, $post_id));
+
+            $publisher = new AutoSEO_Publisher();
+            $publisher->bake_infographic_into_content($post_id);
         }
 
         return rest_ensure_response(array(

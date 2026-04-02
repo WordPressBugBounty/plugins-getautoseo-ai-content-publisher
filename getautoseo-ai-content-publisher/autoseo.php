@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.61
+ * Version: 1.3.62
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.61');
+define('AUTOSEO_VERSION', '1.3.62');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -122,6 +122,10 @@ class AutoSEO_Plugin {
         // Prevent trashing/deleting AutoSEO articles from WP admin (WP 5.5+ short-circuit filters)
         add_filter('pre_trash_post', array($this, 'prevent_autoseo_article_trashing'), 10, 3);
         add_filter('pre_delete_post', array($this, 'prevent_autoseo_article_deleting'), 10, 3);
+
+        // Add 'autoseo' CSS class to post container and body for AutoSEO-managed posts
+        add_filter('post_class', array($this, 'add_autoseo_post_class'), 10, 3);
+        add_filter('body_class', array($this, 'add_autoseo_body_class'));
 
         // Inject infographic image into post content
         add_filter('the_content', array($this, 'inject_infographic_image_into_content'), 10);
@@ -3141,6 +3145,30 @@ class AutoSEO_Plugin {
         $styles[] = 'text-transform';
         $styles[] = 'min-width';
         return $styles;
+    }
+
+    /**
+     * Add 'autoseo' class to the post container element for AutoSEO-managed posts.
+     * Allows users to target AutoSEO articles with custom CSS.
+     */
+    public function add_autoseo_post_class($classes, $extra_classes, $post_id) {
+        if (get_post_meta($post_id, '_autoseo_managed', true)) {
+            $classes[] = 'autoseo';
+        }
+        return $classes;
+    }
+
+    /**
+     * Add 'autoseo' class to the <body> tag when viewing a single AutoSEO-managed post.
+     */
+    public function add_autoseo_body_class($classes) {
+        if (is_singular('post')) {
+            $post = get_post();
+            if ($post && get_post_meta($post->ID, '_autoseo_managed', true)) {
+                $classes[] = 'autoseo';
+            }
+        }
+        return $classes;
     }
 
     /**

@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.62
+ * Version: 1.3.63
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.62');
+define('AUTOSEO_VERSION', '1.3.63');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -3296,9 +3296,7 @@ class AutoSEO_Plugin {
             return $content;
         }
 
-        // Content-based guard: some themes (e.g. Avada with Fusion Builder)
-        // apply the_content filter in multiple rendering passes, bypassing the
-        // static guard below. Check the actual content to prevent duplicates.
+        // Content-based guard: check the filtered $content for the container class.
         if (strpos($content, 'autoseo-infographic-container') !== false) {
             return $content;
         }
@@ -3309,6 +3307,17 @@ class AutoSEO_Plugin {
         global $post;
 
         if (isset($already_injected[$post->ID])) {
+            return $content;
+        }
+
+        // Database guard: if the infographic is baked into the stored post_content,
+        // skip runtime injection. Some themes/page-builders modify $content before
+        // this filter runs (stripping the baked infographic from the filtered string),
+        // but the stored version still renders in the final output — injecting again
+        // would duplicate it.
+        $raw_content = get_post_field('post_content', $post->ID);
+        if (strpos($raw_content, 'autoseo-infographic-container') !== false) {
+            $already_injected[$post->ID] = true;
             return $content;
         }
         

@@ -379,8 +379,9 @@ class AutoSEO_API {
                                     'status' => 'linked',
                                     'synced_at' => $linked_synced_at,
                                     'previous_article_ids' => $previous_article_ids_json ?? null,
+                                    'language' => $article['language'] ?? null,
                                 ),
-                                array('%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+                                array('%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
                             );
 
                             // Clean up stale sync table rows for replaced article versions
@@ -460,6 +461,7 @@ class AutoSEO_API {
                     'intended_published_at' => $intended_published_at,
                     'faq_schema' => isset($article['faq_schema']) ? wp_json_encode($article['faq_schema']) : null,
                     'previous_article_ids' => $previous_article_ids_json,
+                    'language' => $article['language'] ?? null,
                 );
 
                 if ($existing) {
@@ -477,7 +479,7 @@ class AutoSEO_API {
                         $table_name,
                         $update_data,
                         array('autoseo_id' => $article['id']),
-                        array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'),
+                        array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'),
                         array('%s')
                     );
                     
@@ -627,7 +629,7 @@ class AutoSEO_API {
                     $insert_result = $wpdb->insert(
                         $table_name,
                         $article_data,
-                        array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+                        array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
                     );
                     
                     if ($insert_result === false) {

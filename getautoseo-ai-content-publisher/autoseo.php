@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.63
+ * Version: 1.3.64
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.63');
+define('AUTOSEO_VERSION', '1.3.64');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -1256,6 +1256,9 @@ class AutoSEO_Plugin {
         // Add previous_article_ids column for feedback rewrite version tracking
         $this->add_previous_article_ids_column();
 
+        // Add language column for WPML integration
+        $this->add_language_column();
+
         // Settings table for plugin-specific settings
         $settings_table = $wpdb->prefix . 'autoseo_settings';
 
@@ -1592,6 +1595,34 @@ class AutoSEO_Plugin {
             if ($result !== false) {
                 // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
                 error_log('[AutoSEO] Added previous_article_ids column to articles table');
+            }
+        }
+    }
+
+    /**
+     * Add language column for WPML integration.
+     * Stores the article language code (e.g. 'en', 'de', 'pl', 'it') so the
+     * plugin can automatically assign the correct WPML language after publishing.
+     */
+    private function add_language_column() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'autoseo_articles';
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $table_name is escaped with esc_sql()
+        $column_exists = $wpdb->get_results($wpdb->prepare(
+            "SHOW COLUMNS FROM " . esc_sql($table_name) . " LIKE %s",
+            'language'
+        ));
+
+        if (empty($column_exists)) {
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $table_name is escaped with esc_sql()
+            $result = $wpdb->query(
+                "ALTER TABLE " . esc_sql($table_name) . " ADD COLUMN language VARCHAR(10) DEFAULT NULL"
+            );
+            if ($result !== false) {
+                // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+                error_log('[AutoSEO] Added language column for WPML integration');
             }
         }
     }

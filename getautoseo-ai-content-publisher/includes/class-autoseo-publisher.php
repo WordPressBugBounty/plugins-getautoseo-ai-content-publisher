@@ -358,6 +358,11 @@ class AutoSEO_Publisher {
             return new WP_Error('insert_failed', __('Failed to create WordPress post', 'getautoseo-ai-content-publisher'));
         }
 
+        // Assign WPML language if the plugin is active and article has a language
+        if (!empty($article->language)) {
+            $this->set_wpml_language($post_id, $article->language);
+        }
+
         // Set featured image if we have one
         if ($featured_image_id) {
             set_post_thumbnail($post_id, $featured_image_id);
@@ -777,6 +782,11 @@ class AutoSEO_Publisher {
             'Successfully updated WordPress post %d',
             $existing_post->ID
         ));
+
+        // Assign WPML language if the plugin is active and article has a language
+        if (!empty($article->language)) {
+            $this->set_wpml_language($existing_post->ID, $article->language);
+        }
 
         // Handle hero/featured image - ONLY download if URL has ACTUALLY changed
         // When $skip_image_downloads is true, images are pushed separately by the server
@@ -1340,6 +1350,61 @@ class AutoSEO_Publisher {
                 $focus_keyphrase
             ));
         }
+    }
+
+    /**
+     * Assign the correct WPML language to a post.
+     *
+     * Uses WPML's official wpml_set_element_language_details action which
+     * handles the icl_translations table, language directories (/en/, /de/, etc.),
+     * and all internal WPML bookkeeping automatically.
+     *
+     * Falls back gracefully: if WPML is not installed or the language code is
+     * not configured in WPML, the post is left in the site default language.
+     */
+    private function set_wpml_language($post_id, $language_code) {
+        if (!function_exists('icl_object_id') && !defined('ICL_SITEPRESS_VERSION')) {
+            return;
+        }
+
+        $language_code = strtolower(substr($language_code, 0, 2));
+
+        // Verify this language is configured in WPML
+        $active_languages = apply_filters('wpml_active_languages', null, array('skip_missing' => 0));
+        if (!is_array($active_languages) || !isset($active_languages[$language_code])) {
+            $this->log_debug(sprintf(
+                'WPML: language "%s" is not active in WPML for post %d — skipping',
+                $language_code,
+                $post_id
+            ));
+            return;
+        }
+
+        // Check current WPML language assignment
+        $element_type = 'post_post';
+        $current_lang = apply_filters('wpml_element_language_code', null, array(
+            'element_id'   => $post_id,
+            'element_type' => $element_type,
+        ));
+
+        if ($current_lang === $language_code) {
+            return;
+        }
+
+        do_action('wpml_set_element_language_details', array(
+            'element_id'           => $post_id,
+            'element_type'         => $element_type,
+            'trid'                 => false,
+            'language_code'        => $language_code,
+            'source_language_code' => null,
+        ));
+
+        $this->log_debug(sprintf(
+            'WPML: assigned language "%s" to post %d (was: %s)',
+            $language_code,
+            $post_id,
+            $current_lang ?: 'default'
+        ));
     }
 }
 

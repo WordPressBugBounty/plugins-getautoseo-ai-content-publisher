@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.64
+ * Version: 1.3.66
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.64');
+define('AUTOSEO_VERSION', '1.3.66');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -515,6 +515,7 @@ class AutoSEO_Plugin {
         $this->add_faq_schema_column();
         $this->add_hero_image_alt_column();
         $this->add_previous_article_ids_column();
+        $this->add_language_column();
         $this->add_settings_created_at_column();
         
         // Set transient to prevent running again for 1 hour
@@ -540,6 +541,7 @@ class AutoSEO_Plugin {
         $this->add_faq_schema_column();
         $this->add_hero_image_alt_column();
         $this->add_previous_article_ids_column();
+        $this->add_language_column();
         $this->add_settings_created_at_column();
         $this->maybe_convert_tables_to_utf8mb4();
         

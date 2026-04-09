@@ -243,6 +243,15 @@ class AutoSEO_API {
         // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table_name is safely constructed from $wpdb->prefix
         $is_first_sync = $wpdb->get_var("SELECT COUNT(*) FROM {$table_name}") == 0;
 
+        // Pre-check column existence so INSERT/UPDATE never references
+        // a column the local DB table doesn't have yet (handles upgrades
+        // where the schema migration hasn't run).
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $has_language_col = !empty($wpdb->get_results($wpdb->prepare(
+            "SHOW COLUMNS FROM " . esc_sql($table_name) . " LIKE %s",
+            'language'
+        )));
+
         AutoSEO_Publisher::start_batch();
 
         try {
@@ -358,9 +367,7 @@ class AutoSEO_API {
                                 ? '2000-01-01 00:00:00'
                                 : current_time('mysql');
 
-                            $wpdb->insert(
-                                $table_name,
-                                array(
+                            $linked_data = array(
                                     'autoseo_id' => $article['id'],
                                     'post_id' => $existing_post->ID,
                                     'title' => $this->sanitize_for_db($article['title']),
@@ -379,10 +386,13 @@ class AutoSEO_API {
                                     'status' => 'linked',
                                     'synced_at' => $linked_synced_at,
                                     'previous_article_ids' => $previous_article_ids_json ?? null,
-                                    'language' => $article['language'] ?? null,
-                                ),
-                                array('%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
                             );
+                            if ($has_language_col) {
+                                $linked_data['language'] = $article['language'] ?? null;
+                            }
+                            $linked_formats = array_fill(0, count($linked_data), '%s');
+                            $linked_formats[1] = '%d'; // post_id
+                            $wpdb->insert($table_name, $linked_data, $linked_formats);
 
                             // Clean up stale sync table rows for replaced article versions
                             if (!empty($article['previous_article_ids']) && is_array($article['previous_article_ids'])) {
@@ -461,8 +471,10 @@ class AutoSEO_API {
                     'intended_published_at' => $intended_published_at,
                     'faq_schema' => isset($article['faq_schema']) ? wp_json_encode($article['faq_schema']) : null,
                     'previous_article_ids' => $previous_article_ids_json,
-                    'language' => $article['language'] ?? null,
                 );
+                if ($has_language_col) {
+                    $article_data['language'] = $article['language'] ?? null;
+                }
 
                 if ($existing) {
                     // For already-published articles, preserve old synced_at during the
@@ -475,11 +487,12 @@ class AutoSEO_API {
                     }
 
                     // Update existing article in sync table
+                    $update_formats = array_fill(0, count($update_data), '%s');
                     $update_result = $wpdb->update(
                         $table_name,
                         $update_data,
                         array('autoseo_id' => $article['id']),
-                        array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'),
+                        $update_formats,
                         array('%s')
                     );
                     
@@ -626,10 +639,11 @@ class AutoSEO_API {
                     }
                 } else {
                     // Insert new article
+                    $insert_formats = array_fill(0, count($article_data), '%s');
                     $insert_result = $wpdb->insert(
                         $table_name,
                         $article_data,
-                        array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+                        $insert_formats
                     );
                     
                     if ($insert_result === false) {

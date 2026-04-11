@@ -358,6 +358,10 @@ class AutoSEO_Publisher {
             return new WP_Error('insert_failed', __('Failed to create WordPress post', 'getautoseo-ai-content-publisher'));
         }
 
+        // Some themes/plugins auto-inject page-builder meta on wp_insert_post hooks.
+        // Clean it immediately so the post renders via standard post_content.
+        $this->clear_page_builder_meta($post_id);
+
         // Assign WPML language if the plugin is active and article has a language
         if (!empty($article->language)) {
             $this->set_wpml_language($post_id, $article->language);
@@ -758,6 +762,11 @@ class AutoSEO_Publisher {
         // Changing slugs breaks published URLs, kills SEO value, and causes 404s
         // for anyone who bookmarked or linked to the original URL.
 
+        // Page builders (Elementor, Divi, etc.) store their own rendering data in
+        // post meta and ignore post_content entirely. Since AutoSEO articles must
+        // render via standard post_content, strip page-builder meta before updating.
+        $this->clear_page_builder_meta($existing_post->ID);
+
         $this->log_debug(sprintf(
             'Updating WordPress post %d with content length: %d bytes',
             $existing_post->ID,
@@ -1146,6 +1155,60 @@ class AutoSEO_Publisher {
         }
 
         return $published_url;
+    }
+
+    /**
+     * Remove page-builder metadata so WordPress renders from post_content.
+     *
+     * Covers Elementor, Divi Builder, WPBakery, Beaver Builder, Brizy, and
+     * Oxygen. Only deletes keys that actually exist to avoid unnecessary DB writes.
+     *
+     * @param int $post_id WordPress post ID
+     */
+    private function clear_page_builder_meta($post_id) {
+        $keys = array(
+            // Elementor
+            '_elementor_data',
+            '_elementor_edit_mode',
+            '_elementor_template_type',
+            '_elementor_version',
+            '_elementor_pro_version',
+            '_elementor_css',
+            // Divi
+            '_et_builder_version',
+            '_et_pb_use_builder',
+            '_et_pb_old_content',
+            // WPBakery (Visual Composer)
+            '_wpb_vc_js_status',
+            // Beaver Builder
+            '_fl_builder_data',
+            '_fl_builder_data_settings',
+            '_fl_builder_draft',
+            '_fl_builder_draft_settings',
+            '_fl_builder_enabled',
+            // Brizy
+            'brizy_post_uid',
+            'brizy',
+            // Oxygen
+            'ct_builder_shortcodes',
+            'ct_other_template',
+        );
+
+        $cleared = array();
+        foreach ($keys as $key) {
+            if (metadata_exists('post', $post_id, $key)) {
+                delete_post_meta($post_id, $key);
+                $cleared[] = $key;
+            }
+        }
+
+        if (!empty($cleared)) {
+            $this->log_debug(sprintf(
+                'Cleared page-builder meta from post %d: %s',
+                $post_id,
+                implode(', ', $cleared)
+            ));
+        }
     }
 
     /**

@@ -1356,7 +1356,6 @@ class AutoSEO_Publisher {
             }
         }
         
-        // Set the focus keyphrase in Yoast
         if (!empty($focus_keyphrase)) {
             update_post_meta($post_id, '_yoast_wpseo_focuskw', $focus_keyphrase);
             $this->log_debug(sprintf(
@@ -1364,6 +1363,26 @@ class AutoSEO_Publisher {
                 $post_id,
                 $focus_keyphrase
             ));
+        }
+
+        // Explicitly set the OG image so Yoast includes it in og:image output.
+        // Without this, Yoast may not pick up the featured image for social sharing
+        // depending on the site's Yoast settings.
+        $thumbnail_id = get_post_thumbnail_id($post_id);
+        if ($thumbnail_id) {
+            $og_image_url = wp_get_attachment_image_url($thumbnail_id, 'full');
+            if ($og_image_url) {
+                update_post_meta($post_id, '_yoast_wpseo_opengraph-image', $og_image_url);
+                update_post_meta($post_id, '_yoast_wpseo_opengraph-image-id', $thumbnail_id);
+                update_post_meta($post_id, '_yoast_wpseo_twitter-image', $og_image_url);
+                update_post_meta($post_id, '_yoast_wpseo_twitter-image-id', $thumbnail_id);
+                $this->log_debug(sprintf(
+                    'Set Yoast OG/Twitter image for post %d: %s (attachment %d)',
+                    $post_id,
+                    $og_image_url,
+                    $thumbnail_id
+                ));
+            }
         }
     }
 
@@ -1412,6 +1431,22 @@ class AutoSEO_Publisher {
                 $post_id,
                 $focus_keyphrase
             ));
+        }
+
+        $thumbnail_id = get_post_thumbnail_id($post_id);
+        if ($thumbnail_id) {
+            $og_image_url = wp_get_attachment_image_url($thumbnail_id, 'full');
+            if ($og_image_url) {
+                update_post_meta($post_id, 'rank_math_facebook_image', $og_image_url);
+                update_post_meta($post_id, 'rank_math_facebook_image_id', $thumbnail_id);
+                update_post_meta($post_id, 'rank_math_twitter_use_facebook', 'on');
+                $this->log_debug(sprintf(
+                    'Set Rank Math Facebook image for post %d: %s (attachment %d)',
+                    $post_id,
+                    $og_image_url,
+                    $thumbnail_id
+                ));
+            }
         }
     }
 
@@ -1510,10 +1545,10 @@ class AutoSEO_Meta_Output {
     }
 
     /**
-     * Output meta description and keywords tags in wp_head
+     * Output meta description, keywords, and Open Graph tags in wp_head.
+     * Only runs when no SEO plugin (Yoast/Rank Math) is active.
      */
     public static function output_meta_tags() {
-        // Only output on single posts/pages
         if (!is_singular()) {
             return;
         }
@@ -1523,24 +1558,62 @@ class AutoSEO_Meta_Output {
             return;
         }
 
-        // Check if this is an AutoSEO managed post
         $is_autoseo_managed = get_post_meta($post->ID, '_autoseo_managed', true);
         if (!$is_autoseo_managed) {
             return;
         }
 
-        // Get our custom meta fields
         $meta_description = get_post_meta($post->ID, '_autoseo_meta_description', true);
         $meta_keywords = get_post_meta($post->ID, '_autoseo_meta_keywords', true);
 
-        // Output meta description
         if (!empty($meta_description)) {
             echo '<meta name="description" content="' . esc_attr($meta_description) . '" />' . "\n";
         }
 
-        // Output meta keywords (although deprecated in modern SEO, some still use them)
         if (!empty($meta_keywords)) {
             echo '<meta name="keywords" content="' . esc_attr($meta_keywords) . '" />' . "\n";
+        }
+
+        // Open Graph tags for Facebook / social sharing
+        echo '<meta property="og:type" content="article" />' . "\n";
+        echo '<meta property="og:title" content="' . esc_attr(get_the_title($post->ID)) . '" />' . "\n";
+        echo '<meta property="og:url" content="' . esc_url(get_permalink($post->ID)) . '" />' . "\n";
+
+        if (!empty($meta_description)) {
+            echo '<meta property="og:description" content="' . esc_attr($meta_description) . '" />' . "\n";
+        }
+
+        $thumbnail_id = get_post_thumbnail_id($post->ID);
+        if ($thumbnail_id) {
+            $image_url = wp_get_attachment_image_url($thumbnail_id, 'full');
+            if ($image_url) {
+                echo '<meta property="og:image" content="' . esc_url($image_url) . '" />' . "\n";
+
+                $image_meta = wp_get_attachment_metadata($thumbnail_id);
+                if (!empty($image_meta['width'])) {
+                    echo '<meta property="og:image:width" content="' . intval($image_meta['width']) . '" />' . "\n";
+                }
+                if (!empty($image_meta['height'])) {
+                    echo '<meta property="og:image:height" content="' . intval($image_meta['height']) . '" />' . "\n";
+                }
+
+                $image_alt = get_post_meta($thumbnail_id, '_wp_attachment_image_alt', true);
+                if (!empty($image_alt)) {
+                    echo '<meta property="og:image:alt" content="' . esc_attr($image_alt) . '" />' . "\n";
+                }
+            }
+        }
+
+        echo '<meta property="og:site_name" content="' . esc_attr(get_bloginfo('name')) . '" />' . "\n";
+
+        // Twitter Card tags (uses same image)
+        echo '<meta name="twitter:card" content="summary_large_image" />' . "\n";
+        echo '<meta name="twitter:title" content="' . esc_attr(get_the_title($post->ID)) . '" />' . "\n";
+        if (!empty($meta_description)) {
+            echo '<meta name="twitter:description" content="' . esc_attr($meta_description) . '" />' . "\n";
+        }
+        if (!empty($image_url)) {
+            echo '<meta name="twitter:image" content="' . esc_url($image_url) . '" />' . "\n";
         }
     }
 

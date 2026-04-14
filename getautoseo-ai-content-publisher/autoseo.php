@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.67
+ * Version: 1.3.68
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.67');
+define('AUTOSEO_VERSION', '1.3.68');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -2699,6 +2699,23 @@ class AutoSEO_Plugin {
             }
             update_post_meta($post_id, '_autoseo_hero_attachment_id', $attachment_id);
             $this->log_debug(sprintf('Push image: set hero image (attachment %d) for post %d', $attachment_id, $post_id));
+
+            // Update SEO plugin OG image meta so social sharing uses this image
+            $og_image_url = wp_get_attachment_image_url($attachment_id, 'full');
+            if ($og_image_url) {
+                if (defined('WPSEO_VERSION') || class_exists('WPSEO_Meta') || function_exists('wpseo_init')) {
+                    update_post_meta($post_id, '_yoast_wpseo_opengraph-image', $og_image_url);
+                    update_post_meta($post_id, '_yoast_wpseo_opengraph-image-id', $attachment_id);
+                    update_post_meta($post_id, '_yoast_wpseo_twitter-image', $og_image_url);
+                    update_post_meta($post_id, '_yoast_wpseo_twitter-image-id', $attachment_id);
+                    $this->log_debug(sprintf('Push image: set Yoast OG image for post %d', $post_id));
+                } elseif (defined('RANK_MATH_VERSION') || class_exists('RankMath')) {
+                    update_post_meta($post_id, 'rank_math_facebook_image', $og_image_url);
+                    update_post_meta($post_id, 'rank_math_facebook_image_id', $attachment_id);
+                    update_post_meta($post_id, 'rank_math_twitter_use_facebook', 'on');
+                    $this->log_debug(sprintf('Push image: set Rank Math OG image for post %d', $post_id));
+                }
+            }
         } elseif ($image_type === 'infographic') {
             update_post_meta($post_id, '_autoseo_infographic_image_id', $attachment_id);
             if ($original_url) {

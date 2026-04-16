@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.68
+Stable tag: 1.3.69
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,10 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.69 =
+* FIXED: Duplicate og:/twitter: meta tags on articles when SEOPress, AIOSEO, or The SEO Framework was active. The plugin previously only detected Yoast and Rank Math, so sites using other SEO plugins emitted two sets of social meta tags.
+* ADDED: SEOPress support. Article title, meta description, focus keyword, and Facebook/Twitter image are now written to SEOPress's native fields on publish, so SEOPress users no longer have to re-enter SEO data for every article.
 
 = 1.3.51 =
 * FIXED: Sync lock stuck permanently on sites where settings table lacked created_at column

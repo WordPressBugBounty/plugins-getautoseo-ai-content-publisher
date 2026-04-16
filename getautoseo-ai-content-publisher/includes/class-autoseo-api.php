@@ -510,131 +510,180 @@ class AutoSEO_API {
                         // posts are never detected and the article stays in limbo forever.
                         $wp_post = get_post($existing->post_id);
                         if (!$wp_post || $wp_post->post_status === 'trash') {
-                            // User (or another plugin) trashed/deleted this post.
-                            // Respect that decision: mark as trashed in our table and notify
-                            // AutoSEO so the dashboard reflects the correct state.
-                            // Do NOT republish — if the user wants it back, they can
-                            // restore from trash or re-publish from the AutoSEO dashboard.
-                            $this->log_debug(sprintf(
-                                'WordPress post %d for article "%s" was trashed/deleted by user, marking as trashed',
-                                $existing->post_id,
-                                $article['title']
+                            // Before declaring this article trashed, fall back to a meta
+                            // lookup by _autoseo_article_id. The sync table's post_id can
+                            // become stale (e.g. after duplicate cleanup, a manual trash +
+                            // re-publish cycle, or an object-cache blip) even though a
+                            // different, live post still represents this article on the
+                            // site. If such a live post exists, re-link to it instead of
+                            // firing a false "article_trashed" webhook.
+                            $alive_query = new WP_Query(array(
+                                'post_type'              => 'post',
+                                'post_status'            => array('publish', 'draft', 'pending', 'private', 'future'),
+                                'posts_per_page'         => 1,
+                                'no_found_rows'          => true,
+                                'ignore_sticky_posts'    => true,
+                                'update_post_term_cache' => false,
+                                'update_post_meta_cache' => false,
+                                'meta_query'             => array(
+                                    array(
+                                        'key'   => '_autoseo_article_id',
+                                        'value' => (string) $article['id'],
+                                    ),
+                                ),
                             ));
-                            $wpdb->update(
-                                $table_name,
-                                array('post_id' => null, 'status' => 'trashed'),
-                                array('id' => $existing->id),
-                                array('%s', '%s'),
-                                array('%d')
-                            );
+                            $alive_post = !empty($alive_query->posts) ? $alive_query->posts[0] : null;
+                            wp_reset_postdata();
 
-                            $this->send_webhook('article_trashed', array(
-                                'article_id' => $article['id'],
-                            ));
+                            if ($alive_post) {
+                                $this->log_debug(sprintf(
+                                    'Stale post_id for article "%s": sync table had %s (trashed/missing), re-linking to live post %d via meta lookup',
+                                    $article['title'],
+                                    $existing->post_id ?? 'null',
+                                    $alive_post->ID
+                                ));
 
-                            $synced_count++;
-                            continue;
-                        } else {
-                            // If the API reports it never received our published URL,
-                            // re-send the webhook so published_url gets set
-                            $needs_url_confirmation = !empty($article['needs_url_confirmation']);
+                                $wpdb->update(
+                                    $table_name,
+                                    array('post_id' => $alive_post->ID),
+                                    array('id' => $existing->id),
+                                    array('%d'),
+                                    array('%d')
+                                );
 
-                            // Post is alive -- skip update if article content hasn't changed.
-                            // API updated_at is UTC ISO 8601; synced_at is WordPress local time, so convert to UTC for comparison.
-                            $api_updated_at = !empty($article['updated_at']) ? strtotime($article['updated_at']) : 0;
-                            $synced_at_utc = !empty($existing->synced_at) ? strtotime(get_gmt_from_date($existing->synced_at)) : 0;
+                                $existing->post_id = $alive_post->ID;
+                                $wp_post = $alive_post;
+                                // Fall through to the normal update path below.
+                            } else {
+                                // Genuinely trashed or deleted — no live post carries this
+                                // autoseo_id. Respect that decision: mark as trashed in our
+                                // table and notify AutoSEO so the dashboard reflects the
+                                // correct state. Do NOT republish — if the user wants it
+                                // back they can restore from trash or re-publish from the
+                                // AutoSEO dashboard.
+                                $this->log_debug(sprintf(
+                                    'WordPress post %s for article "%s" was trashed/deleted and no live replacement exists, marking as trashed',
+                                    $existing->post_id ?? 'null',
+                                    $article['title']
+                                ));
+                                $wpdb->update(
+                                    $table_name,
+                                    array('post_id' => null, 'status' => 'trashed'),
+                                    array('id' => $existing->id),
+                                    array('%s', '%s'),
+                                    array('%d')
+                                );
 
-                            if ($api_updated_at > 0 && $synced_at_utc > 0 && $api_updated_at <= $synced_at_utc) {
-                                if ($needs_url_confirmation) {
-                                    $publisher = new AutoSEO_Publisher();
-                                    $published_url = $publisher->get_post_permalink($wp_post->ID);
-                                    $webhook_data = array(
-                                        'article_id' => $article['id'],
-                                        'wordpress_post_id' => $wp_post->ID,
-                                        'published_url' => $published_url,
-                                    );
-                                    if (AutoSEO_Publisher::is_batching()) {
-                                        AutoSEO_Publisher::add_to_batch($webhook_data);
-                                    } else {
-                                        $this->send_webhook('article_published', $webhook_data);
-                                    }
-                                    $this->log_debug(sprintf(
-                                        'Re-sending URL confirmation webhook for article "%s" (URL: %s)',
-                                        $article['title'],
-                                        $published_url
-                                    ));
-                                } else {
-                                    $this->log_debug(sprintf(
-                                        'Skipping unchanged article "%s" (API updated_at: %s, synced_at: %s UTC)',
-                                        $article['title'],
-                                        $article['updated_at'] ?? 'unknown',
-                                        gmdate('Y-m-d H:i:s', $synced_at_utc)
-                                    ));
-                                }
+                                $this->send_webhook('article_trashed', array(
+                                    'article_id' => $article['id'],
+                                ));
+
                                 $synced_count++;
                                 continue;
                             }
+                        }
 
-                            $skip_webhook = !$needs_url_confirmation;
-                            $publisher = new AutoSEO_Publisher();
-                            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-                            $refreshed_article = $wpdb->get_row($wpdb->prepare(
-                                "SELECT * FROM {$table_name} WHERE id = %d",
-                                $existing->id
-                            ));
-                            $update_result = $publisher->update_existing_article($existing->id, $refreshed_article, $wp_post, $skip_webhook, $is_push_mode);
-                            if (!is_wp_error($update_result)) {
-                                // In push mode, images are pushed separately by the server
-                                // after the trigger-sync response, so skip asset checks.
-                                $assets_complete = true;
-                                if (!$is_push_mode) {
-                                    if (!empty($article['infographic_image_url']) && !get_post_meta($wp_post->ID, '_autoseo_infographic_image_id', true)) {
-                                        $assets_complete = false;
-                                        $this->log_debug(sprintf(
-                                            'Infographic download incomplete for post %d ("%s") - will retry on next sync',
-                                            $wp_post->ID,
-                                            $article['title']
-                                        ));
-                                    }
-                                    if (!empty($article['hero_image_url']) && !has_post_thumbnail($wp_post->ID)) {
-                                        $assets_complete = false;
-                                        $this->log_debug(sprintf(
-                                            'Hero image download incomplete for post %d ("%s") - will retry on next sync',
-                                            $wp_post->ID,
-                                            $article['title']
-                                        ));
-                                    }
-                                }
+                        // At this point $wp_post is alive (either from the sync table's
+                        // post_id or re-linked via the meta-based fallback above).
+                        // If the API reports it never received our published URL,
+                        // re-send the webhook so published_url gets set
+                        $needs_url_confirmation = !empty($article['needs_url_confirmation']);
 
-                                if ($assets_complete) {
-                                    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-                                    $wpdb->update(
-                                        $table_name,
-                                        array('synced_at' => current_time('mysql')),
-                                        array('id' => $existing->id),
-                                        array('%s'),
-                                        array('%d')
-                                    );
+                        // Post is alive -- skip update if article content hasn't changed.
+                        // API updated_at is UTC ISO 8601; synced_at is WordPress local time, so convert to UTC for comparison.
+                        $api_updated_at = !empty($article['updated_at']) ? strtotime($article['updated_at']) : 0;
+                        $synced_at_utc = !empty($existing->synced_at) ? strtotime(get_gmt_from_date($existing->synced_at)) : 0;
+
+                        if ($api_updated_at > 0 && $synced_at_utc > 0 && $api_updated_at <= $synced_at_utc) {
+                            if ($needs_url_confirmation) {
+                                $publisher = new AutoSEO_Publisher();
+                                $published_url = $publisher->get_post_permalink($wp_post->ID);
+                                $webhook_data = array(
+                                    'article_id' => $article['id'],
+                                    'wordpress_post_id' => $wp_post->ID,
+                                    'published_url' => $published_url,
+                                );
+                                if (AutoSEO_Publisher::is_batching()) {
+                                    AutoSEO_Publisher::add_to_batch($webhook_data);
+                                } else {
+                                    $this->send_webhook('article_published', $webhook_data);
                                 }
-                                $synced_count++;
                                 $this->log_debug(sprintf(
-                                    'Updated existing WordPress post %d for article "%s"%s',
-                                    $existing->post_id,
+                                    'Re-sending URL confirmation webhook for article "%s" (URL: %s)',
                                     $article['title'],
-                                    $assets_complete ? '' : ' (assets incomplete, synced_at preserved for retry)'
+                                    $published_url
                                 ));
                             } else {
                                 $this->log_debug(sprintf(
-                                    'Failed to update article "%s" - synced_at preserved for retry on next sync',
-                                    $article['title']
-                                ));
-                                $errors[] = sprintf(
-                                    /* translators: 1: article title, 2: error message */
-                                    __('Failed to update article "%1$s": %2$s', 'getautoseo-ai-content-publisher'),
+                                    'Skipping unchanged article "%s" (API updated_at: %s, synced_at: %s UTC)',
                                     $article['title'],
-                                    $update_result->get_error_message()
+                                    $article['updated_at'] ?? 'unknown',
+                                    gmdate('Y-m-d H:i:s', $synced_at_utc)
+                                ));
+                            }
+                            $synced_count++;
+                            continue;
+                        }
+
+                        $skip_webhook = !$needs_url_confirmation;
+                        $publisher = new AutoSEO_Publisher();
+                        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                        $refreshed_article = $wpdb->get_row($wpdb->prepare(
+                            "SELECT * FROM {$table_name} WHERE id = %d",
+                            $existing->id
+                        ));
+                        $update_result = $publisher->update_existing_article($existing->id, $refreshed_article, $wp_post, $skip_webhook, $is_push_mode);
+                        if (!is_wp_error($update_result)) {
+                            // In push mode, images are pushed separately by the server
+                            // after the trigger-sync response, so skip asset checks.
+                            $assets_complete = true;
+                            if (!$is_push_mode) {
+                                if (!empty($article['infographic_image_url']) && !get_post_meta($wp_post->ID, '_autoseo_infographic_image_id', true)) {
+                                    $assets_complete = false;
+                                    $this->log_debug(sprintf(
+                                        'Infographic download incomplete for post %d ("%s") - will retry on next sync',
+                                        $wp_post->ID,
+                                        $article['title']
+                                    ));
+                                }
+                                if (!empty($article['hero_image_url']) && !has_post_thumbnail($wp_post->ID)) {
+                                    $assets_complete = false;
+                                    $this->log_debug(sprintf(
+                                        'Hero image download incomplete for post %d ("%s") - will retry on next sync',
+                                        $wp_post->ID,
+                                        $article['title']
+                                    ));
+                                }
+                            }
+
+                            if ($assets_complete) {
+                                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                                $wpdb->update(
+                                    $table_name,
+                                    array('synced_at' => current_time('mysql')),
+                                    array('id' => $existing->id),
+                                    array('%s'),
+                                    array('%d')
                                 );
                             }
+                            $synced_count++;
+                            $this->log_debug(sprintf(
+                                'Updated existing WordPress post %d for article "%s"%s',
+                                $existing->post_id,
+                                $article['title'],
+                                $assets_complete ? '' : ' (assets incomplete, synced_at preserved for retry)'
+                            ));
+                        } else {
+                            $this->log_debug(sprintf(
+                                'Failed to update article "%s" - synced_at preserved for retry on next sync',
+                                $article['title']
+                            ));
+                            $errors[] = sprintf(
+                                /* translators: 1: article title, 2: error message */
+                                __('Failed to update article "%1$s": %2$s', 'getautoseo-ai-content-publisher'),
+                                $article['title'],
+                                $update_result->get_error_message()
+                            );
                         }
                     }
                 } else {

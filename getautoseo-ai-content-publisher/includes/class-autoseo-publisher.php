@@ -1287,7 +1287,8 @@ class AutoSEO_Publisher {
             update_post_meta($post_id, '_autoseo_faq_schema', $article->faq_schema);
         }
 
-        // Set SEO plugin meta fields (Yoast or Rank Math)
+        // Populate the active SEO plugin's native meta fields so the user
+        // doesn't have to re-enter title/description/keywords/social images.
         if ($this->is_yoast_active()) {
             $this->set_yoast_meta($post_id, $article);
             $this->log_debug(sprintf(
@@ -1304,9 +1305,17 @@ class AutoSEO_Publisher {
                 strlen($article->meta_description ?? ''),
                 $article->keywords ?? 'none'
             ));
+        } elseif ($this->is_seopress_active()) {
+            $this->set_seopress_meta($post_id, $article);
+            $this->log_debug(sprintf(
+                'Set SEOPress meta for post %d - description: %d chars, primary keyword: %s',
+                $post_id,
+                strlen($article->meta_description ?? ''),
+                $article->keywords ?? 'none'
+            ));
         } else {
             $this->log_debug(sprintf(
-                'No SEO plugin active - using custom meta for post %d',
+                'No supported SEO plugin active - using custom meta for post %d',
                 $post_id
             ));
         }
@@ -1451,6 +1460,89 @@ class AutoSEO_Publisher {
     }
 
     /**
+     * Check if SEOPress plugin is active
+     *
+     * @return bool
+     */
+    private function is_seopress_active() {
+        return defined('SEOPRESS_VERSION') ||
+               function_exists('seopress_get_service') ||
+               class_exists('SEOPress\\Core\\Kernel');
+    }
+
+    /**
+     * Set SEOPress meta fields so the user doesn't have to re-enter them.
+     *
+     * SEOPress stores its data in post_meta with the `_seopress_` prefix.
+     * We populate the SEO title, meta description, focus keyword, and the
+     * Facebook / Twitter social fields so social previews work out of the box.
+     *
+     * @param int $post_id WordPress post ID
+     * @param object $article Article data from sync table
+     */
+    private function set_seopress_meta($post_id, $article) {
+        $title = get_the_title($post_id);
+
+        if (!empty($title)) {
+            update_post_meta($post_id, '_seopress_titles_title', $title);
+        }
+
+        if (!empty($article->meta_description)) {
+            update_post_meta($post_id, '_seopress_titles_desc', $article->meta_description);
+        }
+
+        $focus_keyphrase = '';
+        if (!empty($article->keywords)) {
+            $keywords_array = array_map('trim', explode(',', $article->keywords));
+            if (!empty($keywords_array[0])) {
+                $focus_keyphrase = $keywords_array[0];
+            }
+        }
+        if (empty($focus_keyphrase) && !empty($article->meta_keywords)) {
+            $meta_keywords_array = array_map('trim', explode(',', $article->meta_keywords));
+            if (!empty($meta_keywords_array[0])) {
+                $focus_keyphrase = $meta_keywords_array[0];
+            }
+        }
+        if (!empty($focus_keyphrase)) {
+            // SEOPress stores the target keyword as a comma-separated list
+            update_post_meta($post_id, '_seopress_analysis_target_kw', $focus_keyphrase);
+            $this->log_debug(sprintf(
+                'Set SEOPress target keyword for post %d: "%s"',
+                $post_id,
+                $focus_keyphrase
+            ));
+        }
+
+        // Facebook Open Graph fields
+        if (!empty($title)) {
+            update_post_meta($post_id, '_seopress_social_fb_title', $title);
+            update_post_meta($post_id, '_seopress_social_twitter_title', $title);
+        }
+        if (!empty($article->meta_description)) {
+            update_post_meta($post_id, '_seopress_social_fb_desc', $article->meta_description);
+            update_post_meta($post_id, '_seopress_social_twitter_desc', $article->meta_description);
+        }
+
+        $thumbnail_id = get_post_thumbnail_id($post_id);
+        if ($thumbnail_id) {
+            $og_image_url = wp_get_attachment_image_url($thumbnail_id, 'full');
+            if ($og_image_url) {
+                update_post_meta($post_id, '_seopress_social_fb_img', $og_image_url);
+                update_post_meta($post_id, '_seopress_social_fb_img_attachment_id', $thumbnail_id);
+                update_post_meta($post_id, '_seopress_social_twitter_img', $og_image_url);
+                update_post_meta($post_id, '_seopress_social_twitter_img_attachment_id', $thumbnail_id);
+                $this->log_debug(sprintf(
+                    'Set SEOPress Facebook/Twitter image for post %d: %s (attachment %d)',
+                    $post_id,
+                    $og_image_url,
+                    $thumbnail_id
+                ));
+            }
+        }
+    }
+
+    /**
      * Assign the correct WPML language to a post.
      *
      * Uses WPML's official wpml_set_element_language_details action which
@@ -1526,10 +1618,14 @@ class AutoSEO_Meta_Output {
     }
 
     /**
-     * Check if a supported SEO plugin (Yoast or Rank Math) is active.
-     * When one of these is active, we let it handle meta description output
-     * to avoid duplicate meta tags.
-     * 
+     * Check if any supported SEO plugin is active.
+     * When one is active, we let it handle meta description and Open Graph
+     * output so we don't emit duplicate tags.
+     *
+     * Detects Yoast SEO, Rank Math, SEOPress, All in One SEO (AIOSEO),
+     * and The SEO Framework — all of which output their own og:/twitter:
+     * meta tags.
+     *
      * @return bool
      */
     private static function is_seo_plugin_active() {
@@ -1539,6 +1635,18 @@ class AutoSEO_Meta_Output {
         }
         // Rank Math
         if (defined('RANK_MATH_VERSION') || class_exists('RankMath') || class_exists('RankMath\\Helper')) {
+            return true;
+        }
+        // SEOPress
+        if (defined('SEOPRESS_VERSION') || function_exists('seopress_get_service') || class_exists('SEOPress\\Core\\Kernel')) {
+            return true;
+        }
+        // All in One SEO (AIOSEO)
+        if (defined('AIOSEO_VERSION') || defined('AIOSEO_FILE') || class_exists('AIOSEO\\Plugin\\AIOSEO')) {
+            return true;
+        }
+        // The SEO Framework
+        if (defined('THE_SEO_FRAMEWORK_DB_VERSION') || class_exists('The_SEO_Framework\\Load') || function_exists('the_seo_framework')) {
             return true;
         }
         return false;

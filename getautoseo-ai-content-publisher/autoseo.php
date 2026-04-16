@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.68
+ * Version: 1.3.69
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.68');
+define('AUTOSEO_VERSION', '1.3.69');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -2714,6 +2714,12 @@ class AutoSEO_Plugin {
                     update_post_meta($post_id, 'rank_math_facebook_image_id', $attachment_id);
                     update_post_meta($post_id, 'rank_math_twitter_use_facebook', 'on');
                     $this->log_debug(sprintf('Push image: set Rank Math OG image for post %d', $post_id));
+                } elseif (defined('SEOPRESS_VERSION') || function_exists('seopress_get_service')) {
+                    update_post_meta($post_id, '_seopress_social_fb_img', $og_image_url);
+                    update_post_meta($post_id, '_seopress_social_fb_img_attachment_id', $attachment_id);
+                    update_post_meta($post_id, '_seopress_social_twitter_img', $og_image_url);
+                    update_post_meta($post_id, '_seopress_social_twitter_img_attachment_id', $attachment_id);
+                    $this->log_debug(sprintf('Push image: set SEOPress social image for post %d', $post_id));
                 }
             }
         } elseif ($image_type === 'infographic') {

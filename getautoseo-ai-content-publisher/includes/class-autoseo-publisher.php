@@ -401,13 +401,13 @@ class AutoSEO_Publisher {
             }
         }
 
-        // Store infographic HTML as post meta
+        // Store or clear infographic HTML as post meta
         if (!empty($article->infographic_html)) {
             update_post_meta($post_id, '_autoseo_infographic_html', $article->infographic_html);
+            $this->bake_infographic_into_content($post_id);
+        } else {
+            $this->strip_infographic_from_content($post_id);
         }
-
-        // Bake infographic into post_content so it doesn't depend on the_content filter
-        $this->bake_infographic_into_content($post_id);
 
         // Store keywords as post meta
         if (!empty($article->keywords)) {
@@ -566,6 +566,44 @@ class AutoSEO_Publisher {
         ));
 
         $this->log_debug(sprintf('Baked infographic into post_content for post %d', $post_id));
+    }
+
+    /**
+     * Remove any previously baked infographic from post_content and clear
+     * related post meta. Called when the server sends null infographic data
+     * (user disabled infographics on the site).
+     */
+    public function strip_infographic_from_content($post_id) {
+        $post = get_post($post_id);
+        if (!$post || empty($post->post_content)) {
+            return;
+        }
+
+        $content = $post->post_content;
+        $original = $content;
+
+        $content = preg_replace(
+            '/<!-- autoseo-infographic -->.*?<!-- \/autoseo-infographic -->\s*/s',
+            '',
+            $content
+        );
+        $content = preg_replace(
+            '/<div class="autoseo-infographic-container">.*?<\/div>\s*/s',
+            '',
+            $content
+        );
+
+        if ($content !== $original) {
+            wp_update_post(array(
+                'ID'           => $post_id,
+                'post_content' => $content,
+            ));
+            $this->log_debug(sprintf('Stripped infographic from post_content for post %d', $post_id));
+        }
+
+        delete_post_meta($post_id, '_autoseo_infographic_html');
+        delete_post_meta($post_id, '_autoseo_infographic_image_id');
+        delete_post_meta($post_id, '_autoseo_infographic_image_url');
     }
 
     /**
@@ -994,13 +1032,13 @@ class AutoSEO_Publisher {
             }
         }
 
-        // Update infographic HTML
+        // Update or clear infographic HTML
         if (!empty($article->infographic_html)) {
             update_post_meta($existing_post->ID, '_autoseo_infographic_html', $article->infographic_html);
+            $this->bake_infographic_into_content($existing_post->ID);
+        } else {
+            $this->strip_infographic_from_content($existing_post->ID);
         }
-
-        // Bake infographic into post_content so it doesn't depend on the_content filter
-        $this->bake_infographic_into_content($existing_post->ID);
 
         // Update keywords
         if (!empty($article->keywords)) {
@@ -1339,7 +1377,11 @@ class AutoSEO_Publisher {
      * @param object $article Article data from sync table
      */
     private function set_yoast_meta($post_id, $article) {
-        // Yoast stores meta description in _yoast_wpseo_metadesc
+        $title = get_the_title($post_id);
+        if (!empty($title)) {
+            update_post_meta($post_id, '_yoast_wpseo_title', $title);
+        }
+
         if (!empty($article->meta_description)) {
             update_post_meta($post_id, '_yoast_wpseo_metadesc', $article->meta_description);
         }
@@ -1413,6 +1455,11 @@ class AutoSEO_Publisher {
      * @param object $article Article data from sync table
      */
     private function set_rank_math_meta($post_id, $article) {
+        $title = get_the_title($post_id);
+        if (!empty($title)) {
+            update_post_meta($post_id, 'rank_math_title', $title);
+        }
+
         if (!empty($article->meta_description)) {
             update_post_meta($post_id, 'rank_math_description', $article->meta_description);
         }

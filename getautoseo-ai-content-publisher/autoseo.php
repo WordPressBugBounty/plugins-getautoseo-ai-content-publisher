@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.69
+ * Version: 1.3.70
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.69');
+define('AUTOSEO_VERSION', '1.3.70');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -118,6 +118,14 @@ class AutoSEO_Plugin {
         add_action('admin_footer', array($this, 'add_autoseo_content_readonly_script'));
         add_filter('post_row_actions', array($this, 'modify_autoseo_article_row_actions'), 10, 2);
         add_filter('use_block_editor_for_post', array($this, 'disable_gutenberg_for_autoseo_articles'), 10, 2);
+
+        // Protect AutoSEO post content from being overwritten by admin editor saves.
+        // TinyMCE strips SVG elements (author box social icons) during its HTML parsing,
+        // and saving from the admin editor would persist that stripped content.
+        add_filter('wp_insert_post_data', array($this, 'protect_autoseo_content_on_admin_save'), 10, 2);
+
+        // Add SVG/path to TinyMCE valid elements so social icons display in the editor
+        add_filter('tiny_mce_before_init', array($this, 'add_svg_to_tinymce_valid_elements'));
 
         // Prevent trashing/deleting AutoSEO articles from WP admin (WP 5.5+ short-circuit filters)
         add_filter('pre_trash_post', array($this, 'prevent_autoseo_article_trashing'), 10, 3);
@@ -2906,7 +2914,7 @@ class AutoSEO_Plugin {
                                 <?php esc_html_e('AutoSEO Managed Article', 'getautoseo-ai-content-publisher'); ?>
                             </h3>
                             <p style="margin: 0;">
-                                <?php esc_html_e('The content of this article is managed by AutoSEO and is read-only. You can still edit SEO settings, categories, tags, and other meta fields below.', 'getautoseo-ai-content-publisher'); ?>
+                                <?php esc_html_e('This article\'s content is managed by AutoSEO. You can edit the title, SEO settings, categories, and tags — any content changes will be ignored on save.', 'getautoseo-ai-content-publisher'); ?>
                             </p>
                         </div>
                     </div>
@@ -2933,51 +2941,29 @@ class AutoSEO_Plugin {
         ?>
         <script>
         jQuery(document).ready(function($) {
-            // Classic editor: make title and content fields read-only
-            $('#title').prop('readonly', true).css('background-color', '#f0f0f0');
-            $('#content').prop('readonly', true).css('background-color', '#f0f0f0');
-
-            // Disable TinyMCE editing if loaded
-            if (typeof tinymce !== 'undefined') {
-                var checkEditor = setInterval(function() {
-                    var editor = tinymce.get('content');
-                    if (editor) {
-                        editor.on('init', function() {
-                            editor.getBody().setAttribute('contenteditable', 'false');
-                            editor.getBody().style.backgroundColor = '#f0f0f0';
-                            editor.getBody().style.opacity = '0.8';
-                        });
-                        if (editor.initialized) {
-                            editor.getBody().setAttribute('contenteditable', 'false');
-                            editor.getBody().style.backgroundColor = '#f0f0f0';
-                            editor.getBody().style.opacity = '0.8';
-                        }
-                        clearInterval(checkEditor);
-                    }
-                }, 200);
-            }
-
-            // Add overlay label to the content editor area
-            $('#postdivrich, #post-body-content').find('#wp-content-wrap').css('position', 'relative');
+            // Content textarea is readonly (text-mode fallback); visual TinyMCE
+            // stays editable so Rank Math / Yoast can analyze it for SEO scoring.
+            // Server-side filter (protect_autoseo_content_on_admin_save) discards
+            // any content changes on save, so edits here are harmless.
+            $('#content').prop('readonly', true).css('background-color', '#f5f5f5');
 
             // Hide the "Move to Trash" link in the editor
             $('#delete-action').hide();
         });
         </script>
         <style>
-            /* Dim the content editor to signal read-only, keep meta boxes fully visible */
-            body.post-php .autoseo-readonly-editor #titlewrap,
+            /* Subtle indicator that content is managed, without blocking interaction */
             body.post-php .autoseo-readonly-editor #postdivrich {
                 position: relative;
             }
-            body.post-php .autoseo-readonly-editor #titlewrap::after,
-            body.post-php .autoseo-readonly-editor #postdivrich::after {
-                content: "";
-                position: absolute;
-                top: 0; left: 0; right: 0; bottom: 0;
-                background: rgba(255,255,255,0.3);
-                pointer-events: none;
-                z-index: 5;
+            body.post-php .autoseo-readonly-editor #postdivrich::before {
+                content: "Content managed by AutoSEO — changes will not be saved";
+                display: block;
+                background: #e8f4fd;
+                color: #2980b9;
+                font-size: 12px;
+                padding: 6px 12px;
+                border-bottom: 1px solid #bee5eb;
             }
         </style>
         <script>
@@ -3116,6 +3102,61 @@ class AutoSEO_Plugin {
             return false;
         }
         return $use_block_editor;
+    }
+
+    /**
+     * Preserve AutoSEO post content when saved from the WP admin editor.
+     * TinyMCE strips inline SVGs (used for author box social icons) during its
+     * HTML parsing, even when the editor is read-only. Without this filter,
+     * clicking "Update" (e.g. to save a Rank Math meta title) would persist the
+     * stripped content and permanently lose the social icons.
+     *
+     * This only fires for admin-editor saves (action=editpost); programmatic
+     * updates from the plugin's own sync/publish flow are not affected.
+     */
+    public function protect_autoseo_content_on_admin_save($data, $postarr) {
+        if (!isset($_POST['action']) || $_POST['action'] !== 'editpost') {
+            return $data;
+        }
+
+        if (empty($postarr['ID'])) {
+            return $data;
+        }
+
+        if (!get_post_meta($postarr['ID'], '_autoseo_managed', true)) {
+            return $data;
+        }
+
+        $original_post = get_post($postarr['ID']);
+        if ($original_post) {
+            $data['post_content'] = $original_post->post_content;
+        }
+
+        return $data;
+    }
+
+    /**
+     * Add SVG and path elements to TinyMCE's valid elements list for AutoSEO
+     * posts, so author box social icons render correctly in the Classic Editor
+     * instead of being silently stripped during HTML parsing.
+     */
+    public function add_svg_to_tinymce_valid_elements($init_array) {
+        global $post;
+
+        if (!isset($post->ID) || !$this->is_autoseo_article($post->ID)) {
+            return $init_array;
+        }
+
+        $svg_elements = 'svg[xmlns|width|height|viewBox|viewbox|fill|stroke|class|style|aria-hidden|role],'
+            . 'path[d|fill|stroke|stroke-width|stroke-linecap|fill-rule|clip-rule]';
+
+        if (!empty($init_array['extended_valid_elements'])) {
+            $init_array['extended_valid_elements'] .= ',' . $svg_elements;
+        } else {
+            $init_array['extended_valid_elements'] = $svg_elements;
+        }
+
+        return $init_array;
     }
 
     /**
@@ -3304,6 +3345,10 @@ class AutoSEO_Plugin {
         if (!$post || !get_post_meta($post->ID, '_autoseo_article_id', true)) {
             return $content;
         }
+
+        // Strip empty anchor tags produced when AI-generated markdown []()
+        // links survive into HTML (e.g. <a href=""></a>).
+        $content = preg_replace('/<a\s+href=["\'][\s]*["\']>\s*<\/a>/i', '', $content);
 
         return preg_replace_callback(
             '/<h2(?![^>]*\bid=)([^>]*)>(.*?)<\/h2>/is',

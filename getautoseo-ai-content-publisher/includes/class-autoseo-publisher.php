@@ -345,7 +345,12 @@ class AutoSEO_Publisher {
         }
 
         // Insert the post - pass true to return WP_Error on failure
-        $post_id = wp_insert_post($post_data, true);
+        AutoSEO_Plugin::allow_content_updates();
+        try {
+            $post_id = wp_insert_post($post_data, true);
+        } finally {
+            AutoSEO_Plugin::disallow_content_updates();
+        }
 
         if (is_wp_error($post_id)) {
             $this->log_debug('Failed to create WordPress post: ' . $post_id->get_error_message());
@@ -560,10 +565,15 @@ class AutoSEO_Publisher {
                      . substr($content, $insert_position);
         }
 
-        wp_update_post(array(
-            'ID'           => $post_id,
-            'post_content' => $content,
-        ));
+        AutoSEO_Plugin::allow_content_updates();
+        try {
+            wp_update_post(array(
+                'ID'           => $post_id,
+                'post_content' => $content,
+            ));
+        } finally {
+            AutoSEO_Plugin::disallow_content_updates();
+        }
 
         $this->log_debug(sprintf('Baked infographic into post_content for post %d', $post_id));
     }
@@ -594,10 +604,15 @@ class AutoSEO_Publisher {
         );
 
         if ($content !== $original) {
-            wp_update_post(array(
-                'ID'           => $post_id,
-                'post_content' => $content,
-            ));
+            AutoSEO_Plugin::allow_content_updates();
+            try {
+                wp_update_post(array(
+                    'ID'           => $post_id,
+                    'post_content' => $content,
+                ));
+            } finally {
+                AutoSEO_Plugin::disallow_content_updates();
+            }
             $this->log_debug(sprintf('Stripped infographic from post_content for post %d', $post_id));
         }
 
@@ -715,10 +730,15 @@ class AutoSEO_Publisher {
             $post = get_post($post_id);
             if ($post && strpos($post->post_content, $remote_url) !== false) {
                 $updated_content = str_replace($remote_url, $stored_local_url, $post->post_content);
-                wp_update_post(array(
-                    'ID' => $post_id,
-                    'post_content' => $updated_content,
-                ));
+                AutoSEO_Plugin::allow_content_updates();
+                try {
+                    wp_update_post(array(
+                        'ID' => $post_id,
+                        'post_content' => $updated_content,
+                    ));
+                } finally {
+                    AutoSEO_Plugin::disallow_content_updates();
+                }
                 $this->log_debug(sprintf(
                     'Replaced author thumbnail URL in post %d content',
                     $post_id
@@ -800,29 +820,58 @@ class AutoSEO_Publisher {
         // Changing slugs breaks published URLs, kills SEO value, and causes 404s
         // for anyone who bookmarked or linked to the original URL.
 
-        // Page builders (Elementor, Divi, etc.) store their own rendering data in
-        // post meta and ignore post_content entirely. Since AutoSEO articles must
-        // render via standard post_content, strip page-builder meta before updating.
-        $this->clear_page_builder_meta($existing_post->ID);
+        // If the user has edited this post with a page builder (Elementor, Divi,
+        // etc.) since we last published it, respect their changes: skip the
+        // content update and keep all page-builder meta intact.
+        $page_builder = self::has_page_builder_content($existing_post->ID);
 
-        $this->log_debug(sprintf(
-            'Updating WordPress post %d with content length: %d bytes',
-            $existing_post->ID,
-            strlen($article->content)
-        ));
+        if ($page_builder) {
+            // Only update title and meta — leave post_content, post_excerpt,
+            // and all page-builder meta completely untouched.  We avoid
+            // wp_update_post here because it merges with the existing row and
+            // re-runs content_save_pre (KSES) on the Elementor HTML, which
+            // could degrade the stored content over many syncs.
+            $title = !empty($article->title) ? $article->title : $existing_post->post_title;
+            $wpdb->update(
+                $wpdb->posts,
+                array('post_title' => $title, 'post_author' => $post_author),
+                array('ID' => $existing_post->ID),
+                array('%s', '%d'),
+                array('%d')
+            );
+            clean_post_cache($existing_post->ID);
+            update_post_meta($existing_post->ID, '_autoseo_article_id', $article->autoseo_id);
+            update_post_meta($existing_post->ID, '_autoseo_managed', '1');
 
-        $result = wp_update_post($post_data, true);
+            $this->log_debug(sprintf(
+                'Post %d has %s edits — preserving user content, updating title + metadata only',
+                $existing_post->ID,
+                $page_builder
+            ));
+        } else {
+            $this->clear_page_builder_meta($existing_post->ID);
+            $this->log_debug(sprintf(
+                'Updating WordPress post %d with content length: %d bytes',
+                $existing_post->ID,
+                strlen($article->content)
+            ));
 
-        if (is_wp_error($result)) {
-            $this->log_debug('Failed to update WordPress post: ' . $result->get_error_message());
-            return $result;
-        }
-        
-        // Additional check - wp_update_post with true should return WP_Error on failure,
-        // but verify we got a valid post ID back
-        if (empty($result) || $result === 0) {
-            $this->log_debug('wp_update_post returned empty/zero for post ' . $existing_post->ID);
-            return new WP_Error('update_failed', __('WordPress post update returned invalid result', 'getautoseo-ai-content-publisher'));
+            AutoSEO_Plugin::allow_content_updates();
+            try {
+                $result = wp_update_post($post_data, true);
+            } finally {
+                AutoSEO_Plugin::disallow_content_updates();
+            }
+
+            if (is_wp_error($result)) {
+                $this->log_debug('Failed to update WordPress post: ' . $result->get_error_message());
+                return $result;
+            }
+            
+            if (empty($result) || $result === 0) {
+                $this->log_debug('wp_update_post returned empty/zero for post ' . $existing_post->ID);
+                return new WP_Error('update_failed', __('WordPress post update returned invalid result', 'getautoseo-ai-content-publisher'));
+            }
         }
         
         $this->log_debug(sprintf(
@@ -1024,20 +1073,23 @@ class AutoSEO_Publisher {
             ));
         }
 
-        // Handle author box thumbnail — download once and replace URL in content
-        if (!$skip_image_downloads) {
-            $author_thumb_url = get_option('autoseo_author_box_remote_url', '');
-            if (!empty($author_thumb_url)) {
-                $this->handle_author_thumbnail($existing_post->ID, $author_thumb_url);
+        // Skip content-modifying operations when user has page-builder edits
+        if (!$page_builder) {
+            // Handle author box thumbnail — download once and replace URL in content
+            if (!$skip_image_downloads) {
+                $author_thumb_url = get_option('autoseo_author_box_remote_url', '');
+                if (!empty($author_thumb_url)) {
+                    $this->handle_author_thumbnail($existing_post->ID, $author_thumb_url);
+                }
             }
-        }
 
-        // Update or clear infographic HTML
-        if (!empty($article->infographic_html)) {
-            update_post_meta($existing_post->ID, '_autoseo_infographic_html', $article->infographic_html);
-            $this->bake_infographic_into_content($existing_post->ID);
-        } else {
-            $this->strip_infographic_from_content($existing_post->ID);
+            // Update or clear infographic HTML
+            if (!empty($article->infographic_html)) {
+                update_post_meta($existing_post->ID, '_autoseo_infographic_html', $article->infographic_html);
+                $this->bake_infographic_into_content($existing_post->ID);
+            } else {
+                $this->strip_infographic_from_content($existing_post->ID);
+            }
         }
 
         // Update keywords
@@ -1193,6 +1245,52 @@ class AutoSEO_Publisher {
         }
 
         return $published_url;
+    }
+
+    /**
+     * Check whether a post has been edited with a page builder after AutoSEO
+     * published it.  Returns the builder name (truthy) or false.
+     *
+     * On initial publish the plugin clears page-builder meta, so any meta
+     * that exists afterward was added by the user intentionally.
+     *
+     * @param int $post_id WordPress post ID
+     * @return string|false Builder name or false
+     */
+    public static function has_page_builder_content($post_id) {
+        // Elementor: check both the JSON data and the edit-mode flag.
+        // _elementor_edit_mode is set early in Elementor's save flow (before
+        // wp_update_post fires), so it catches the very first save reliably.
+        $elementor_data = get_post_meta($post_id, '_elementor_data', true);
+        if (!empty($elementor_data) && $elementor_data !== '[]') {
+            return 'Elementor';
+        }
+        if (get_post_meta($post_id, '_elementor_edit_mode', true) === 'builder') {
+            return 'Elementor';
+        }
+
+        if (get_post_meta($post_id, '_et_pb_use_builder', true) === 'on') {
+            return 'Divi';
+        }
+
+        if (get_post_meta($post_id, '_wpb_vc_js_status', true) === 'true') {
+            return 'WPBakery';
+        }
+
+        $fl_data = get_post_meta($post_id, '_fl_builder_data', true);
+        if (!empty($fl_data)) {
+            return 'Beaver Builder';
+        }
+
+        if (get_post_meta($post_id, 'brizy_post_uid', true)) {
+            return 'Brizy';
+        }
+
+        if (get_post_meta($post_id, 'ct_builder_shortcodes', true)) {
+            return 'Oxygen';
+        }
+
+        return false;
     }
 
     /**

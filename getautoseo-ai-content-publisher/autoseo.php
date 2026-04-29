@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.70
+ * Version: 1.3.71
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.70');
+define('AUTOSEO_VERSION', '1.3.71');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -56,6 +56,21 @@ class AutoSEO_Plugin {
      * API Base URL
      */
     private $api_base_url = '';
+
+    /**
+     * When true, the content-protection filter allows post_content changes
+     * through to the database. The plugin sets this before its own
+     * wp_insert_post / wp_update_post calls and clears it immediately after.
+     */
+    private static $allow_content_update = false;
+
+    public static function allow_content_updates() {
+        self::$allow_content_update = true;
+    }
+
+    public static function disallow_content_updates() {
+        self::$allow_content_update = false;
+    }
 
     /**
      * Get single instance of the plugin
@@ -119,9 +134,9 @@ class AutoSEO_Plugin {
         add_filter('post_row_actions', array($this, 'modify_autoseo_article_row_actions'), 10, 2);
         add_filter('use_block_editor_for_post', array($this, 'disable_gutenberg_for_autoseo_articles'), 10, 2);
 
-        // Protect AutoSEO post content from being overwritten by admin editor saves.
-        // TinyMCE strips SVG elements (author box social icons) during its HTML parsing,
-        // and saving from the admin editor would persist that stripped content.
+        // Protect AutoSEO post content from being overwritten by any external save
+        // (admin editor, REST API, third-party plugins). Only the plugin's own
+        // sync/publish/update code bypasses this via the $allow_content_update flag.
         add_filter('wp_insert_post_data', array($this, 'protect_autoseo_content_on_admin_save'), 10, 2);
 
         // Add SVG/path to TinyMCE valid elements so social icons display in the editor
@@ -2943,8 +2958,7 @@ class AutoSEO_Plugin {
         jQuery(document).ready(function($) {
             // Content textarea is readonly (text-mode fallback); visual TinyMCE
             // stays editable so Rank Math / Yoast can analyze it for SEO scoring.
-            // Server-side filter (protect_autoseo_content_on_admin_save) discards
-            // any content changes on save, so edits here are harmless.
+            // Server-side filter discards any content changes on save.
             $('#content').prop('readonly', true).css('background-color', '#f5f5f5');
 
             // Hide the "Move to Trash" link in the editor
@@ -3105,17 +3119,18 @@ class AutoSEO_Plugin {
     }
 
     /**
-     * Preserve AutoSEO post content when saved from the WP admin editor.
-     * TinyMCE strips inline SVGs (used for author box social icons) during its
-     * HTML parsing, even when the editor is read-only. Without this filter,
-     * clicking "Update" (e.g. to save a Rank Math meta title) would persist the
-     * stripped content and permanently lose the social icons.
+     * Preserve AutoSEO post content whenever a managed post is saved by
+     * anything OTHER than the plugin itself. TinyMCE, Gutenberg, REST API
+     * clients, and third-party plugins can all strip or modify inline SVGs
+     * (used for author-box social icons) and other AutoSEO markup.
      *
-     * This only fires for admin-editor saves (action=editpost); programmatic
-     * updates from the plugin's own sync/publish flow are not affected.
+     * Bypassed when:
+     *  - The plugin's own code sets $allow_content_update before writing.
+     *  - The post has active page-builder data (Elementor, Divi, etc.),
+     *    meaning the user is intentionally managing content with a builder.
      */
     public function protect_autoseo_content_on_admin_save($data, $postarr) {
-        if (!isset($_POST['action']) || $_POST['action'] !== 'editpost') {
+        if (self::$allow_content_update) {
             return $data;
         }
 
@@ -3124,6 +3139,12 @@ class AutoSEO_Plugin {
         }
 
         if (!get_post_meta($postarr['ID'], '_autoseo_managed', true)) {
+            return $data;
+        }
+
+        // If the user is managing this post with a page builder, let the
+        // builder save its own content without interference.
+        if (AutoSEO_Publisher::has_page_builder_content($postarr['ID'])) {
             return $data;
         }
 

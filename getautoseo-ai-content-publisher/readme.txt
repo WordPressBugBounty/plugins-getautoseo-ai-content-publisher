@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.70
+Stable tag: 1.3.71
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,10 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.71 =
+* FIXED: Author box social link SVG icons could be stripped when saving an AutoSEO article from the WordPress admin editor (e.g. to add a Rank Math meta title). Content protection now guards against all save paths (Classic Editor, REST API, AJAX), not just the Classic Editor form submission.
+* FIXED: User edits made with page builders (Elementor, Divi, WPBakery, Beaver Builder, Brizy, Oxygen) are no longer overwritten when the plugin re-syncs articles. The plugin now detects active page-builder data and preserves user content while still updating SEO metadata and tags.
 
 = 1.3.69 =
 * FIXED: Duplicate og:/twitter: meta tags on articles when SEOPress, AIOSEO, or The SEO Framework was active. The plugin previously only detected Yoast and Rank Math, so sites using other SEO plugins emitted two sets of social meta tags.

@@ -555,33 +555,74 @@ class AutoSEO_API {
                                 $wp_post = $alive_post;
                                 // Fall through to the normal update path below.
                             } else {
-                                // Genuinely trashed or deleted — no live post carries this
-                                // autoseo_id. Respect that decision: mark as trashed in our
-                                // table and notify AutoSEO so the dashboard reflects the
-                                // correct state. Do NOT republish — if the user wants it
-                                // back they can restore from trash or re-publish from the
-                                // AutoSEO dashboard.
-                                $this->log_debug(sprintf(
-                                    'WordPress post %s for article "%s" was trashed/deleted and no live replacement exists, marking as trashed',
-                                    $existing->post_id ?? 'null',
-                                    $article['title']
-                                ));
-                                $wpdb->update(
-                                    $table_name,
-                                    array('post_id' => null, 'status' => 'trashed'),
-                                    array('id' => $existing->id),
-                                    array('%s', '%s'),
-                                    array('%d')
-                                );
+                                // WP post genuinely deleted — no live post carries this autoseo_id.
+                                $current_recreate_count = isset($existing->recreate_count) ? (int) $existing->recreate_count : 0;
 
-                                $this->send_webhook('article_trashed', array(
-                                    'article_id' => $article['id'],
-                                ));
+                                if ($current_recreate_count < 2) {
+                                    // Auto-recover: reset to pending so the article is
+                                    // republished in this same sync cycle. This handles
+                                    // accidental deletions, security-plugin cleanup, and
+                                    // sites where Cloudflare blocks our push sync so we
+                                    // can't force-republish from the server.
+                                    $this->log_debug(sprintf(
+                                        'WordPress post %s for article "%s" was deleted, auto-recreating (attempt %d/2)',
+                                        $existing->post_id ?? 'null',
+                                        $article['title'],
+                                        $current_recreate_count + 1
+                                    ));
 
-                                $synced_count++;
-                                continue;
+                                    // Split into two updates: core fields first (always
+                                    // succeed), then recreate_count separately (column may
+                                    // not exist yet on older schemas — prevents the entire
+                                    // UPDATE from failing).
+                                    $wpdb->update(
+                                        $table_name,
+                                        array('post_id' => null, 'status' => 'pending'),
+                                        array('id' => $existing->id),
+                                        array('%s', '%s'),
+                                        array('%d')
+                                    );
+                                    $wpdb->update(
+                                        $table_name,
+                                        array('recreate_count' => $current_recreate_count + 1),
+                                        array('id' => $existing->id),
+                                        array('%d'),
+                                        array('%d')
+                                    );
+
+                                    $article_data['status'] = 'pending';
+                                    // Fall through to the auto-publish block below.
+                                } else {
+                                    // Already auto-recreated twice — treat as deliberate
+                                    // deletion. Mark as trashed and notify AutoSEO.
+                                    $this->log_debug(sprintf(
+                                        'WordPress post %s for article "%s" was deleted again after %d auto-recreations, marking as trashed',
+                                        $existing->post_id ?? 'null',
+                                        $article['title'],
+                                        $current_recreate_count
+                                    ));
+                                    $wpdb->update(
+                                        $table_name,
+                                        array('post_id' => null, 'status' => 'trashed'),
+                                        array('id' => $existing->id),
+                                        array('%s', '%s'),
+                                        array('%d')
+                                    );
+
+                                    $this->send_webhook('article_trashed', array(
+                                        'article_id' => $article['id'],
+                                    ));
+
+                                    $synced_count++;
+                                    continue;
+                                }
                             }
                         }
+
+                        if ($article_data['status'] === 'pending') {
+                            // Auto-recreate path: skip the alive-post update logic
+                            // and fall through to the auto-publish block below.
+                        } else {
 
                         // At this point $wp_post is alive (either from the sync table's
                         // post_id or re-linked via the meta-based fallback above).
@@ -685,6 +726,8 @@ class AutoSEO_API {
                                 $update_result->get_error_message()
                             );
                         }
+
+                        } // end alive-post update path
                     }
                 } else {
                     // Insert new article

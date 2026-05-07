@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.72
+ * Version: 1.3.73
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.72');
+define('AUTOSEO_VERSION', '1.3.73');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -230,8 +230,12 @@ class AutoSEO_Plugin {
      * Initialize plugin
      */
     public function init() {
-        // Text domain is automatically loaded by WordPress.org for plugins hosted there
-        // No need to call load_plugin_textdomain() as of WordPress 4.6+
+        // Explicit load for self-hosted distribution (not on WordPress.org)
+        load_plugin_textdomain(
+            'getautoseo-ai-content-publisher',
+            false,
+            dirname(plugin_basename(__FILE__)) . '/languages'
+        );
 
         // Check if user can manage options (admin)
         if (current_user_can('manage_options')) {
@@ -393,11 +397,44 @@ class AutoSEO_Plugin {
             'nonce' => wp_create_nonce('autoseo_ajax_nonce'),
             'debug_mode' => get_option('autoseo_debug_mode', '1'), // Default to enabled
             'strings' => array(
-                'connecting' => __('Connecting...', 'getautoseo-ai-content-publisher'),
-                'connected' => __('Connected!', 'getautoseo-ai-content-publisher'),
-                'error' => __('Error occurred', 'getautoseo-ai-content-publisher'),
-                'syncing' => __('Syncing articles...', 'getautoseo-ai-content-publisher'),
-                'publishing' => __('Publishing article...', 'getautoseo-ai-content-publisher'),
+                'connecting'          => __('Connecting...', 'getautoseo-ai-content-publisher'),
+                'connected'           => __('Connected!', 'getautoseo-ai-content-publisher'),
+                'error'               => __('Error occurred', 'getautoseo-ai-content-publisher'),
+                'syncing'             => __('Syncing articles...', 'getautoseo-ai-content-publisher'),
+                'publishing'          => __('Publishing article...', 'getautoseo-ai-content-publisher'),
+                'testing'             => __('Testing...', 'getautoseo-ai-content-publisher'),
+                'testing_connection'  => __('Testing connection...', 'getautoseo-ai-content-publisher'),
+                'connection_failed'   => __('Connection failed', 'getautoseo-ai-content-publisher'),
+                'connection_success'  => __('Connection successful!', 'getautoseo-ai-content-publisher'),
+                'copied'              => __('Copied!', 'getautoseo-ai-content-publisher'),
+                'copy_failed'         => __('Failed to copy to clipboard.', 'getautoseo-ai-content-publisher'),
+                'confirm_publish'     => __('Are you sure you want to publish this article?', 'getautoseo-ai-content-publisher'),
+                'confirm_bulk'        => __('Are you sure you want to publish %d articles?', 'getautoseo-ai-content-publisher'),
+                'confirm_delete'      => __('Are you sure you want to delete "%s"? This action cannot be undone.', 'getautoseo-ai-content-publisher'),
+                'confirm_reset'       => __('Are you sure you want to reset all settings to defaults? This action cannot be undone.', 'getautoseo-ai-content-publisher'),
+                'confirm_regen_key'   => __('Are you sure you want to regenerate your API key? This will invalidate the current key.', 'getautoseo-ai-content-publisher'),
+                'confirm_clear_sync'  => __('Are you sure you want to clear all sync data? This action cannot be undone.', 'getautoseo-ai-content-publisher'),
+                'select_articles'     => __('Please select articles to publish.', 'getautoseo-ai-content-publisher'),
+                'publish_success'     => __('Article published successfully!', 'getautoseo-ai-content-publisher'),
+                'publish_failed'      => __('Publish failed. Please try again.', 'getautoseo-ai-content-publisher'),
+                'sync_success'        => __('Articles synced successfully!', 'getautoseo-ai-content-publisher'),
+                'sync_failed'         => __('Sync failed. Please try again.', 'getautoseo-ai-content-publisher'),
+                'articles_synced'     => __('%d articles synced', 'getautoseo-ai-content-publisher'),
+                'settings_saved'      => __('Settings saved successfully!', 'getautoseo-ai-content-publisher'),
+                'settings_failed'     => __('Failed to save settings. Please try again.', 'getautoseo-ai-content-publisher'),
+                'debug_enabled'       => __('Debug mode enabled successfully.', 'getautoseo-ai-content-publisher'),
+                'debug_disabled'      => __('Debug mode disabled successfully.', 'getautoseo-ai-content-publisher'),
+                'debug_update_failed' => __('Failed to update debug settings.', 'getautoseo-ai-content-publisher'),
+                'article_details'     => __('Article Details', 'getautoseo-ai-content-publisher'),
+                'close'               => __('Close', 'getautoseo-ai-content-publisher'),
+                'bulk_publish'        => __('Bulk Publish', 'getautoseo-ai-content-publisher'),
+                'bulk_publish_count'  => __('Bulk Publish (%d)', 'getautoseo-ai-content-publisher'),
+                'sync_complete'       => __('Sync Complete!', 'getautoseo-ai-content-publisher'),
+                'sync_complete_msg'   => __('Sync completed successfully! Your content is up to date.', 'getautoseo-ai-content-publisher'),
+                'sync_count_msg'      => __('Successfully synced %d article(s)! Your content is now up to date.', 'getautoseo-ai-content-publisher'),
+                'sync_failed_title'   => __('Sync Failed', 'getautoseo-ai-content-publisher'),
+                'not_available'       => __('This feature is not yet available.', 'getautoseo-ai-content-publisher'),
+                'coming_soon'         => __('Coming soon!', 'getautoseo-ai-content-publisher'),
             )
         ));
         

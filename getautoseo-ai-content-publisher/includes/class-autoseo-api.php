@@ -635,7 +635,25 @@ class AutoSEO_API {
                         $api_updated_at = !empty($article['updated_at']) ? strtotime($article['updated_at']) : 0;
                         $synced_at_utc = !empty($existing->synced_at) ? strtotime(get_gmt_from_date($existing->synced_at)) : 0;
 
-                        if ($api_updated_at > 0 && $synced_at_utc > 0 && $api_updated_at <= $synced_at_utc) {
+                        $missing_assets = false;
+                        if (!$is_push_mode) {
+                            if (!empty($article['hero_image_url']) && !has_post_thumbnail($wp_post->ID)) {
+                                $missing_assets = true;
+                                $this->log_debug(sprintf(
+                                    'Article "%s" is unchanged but missing its hero image - retrying asset download',
+                                    $article['title']
+                                ));
+                            }
+                            if (!empty($article['infographic_image_url']) && !get_post_meta($wp_post->ID, '_autoseo_infographic_image_id', true)) {
+                                $missing_assets = true;
+                                $this->log_debug(sprintf(
+                                    'Article "%s" is unchanged but missing its infographic image - retrying asset download',
+                                    $article['title']
+                                ));
+                            }
+                        }
+
+                        if ($api_updated_at > 0 && $synced_at_utc > 0 && $api_updated_at <= $synced_at_utc && !$missing_assets) {
                             if ($needs_url_confirmation) {
                                 $publisher = new AutoSEO_Publisher();
                                 $published_url = $publisher->get_post_permalink($wp_post->ID);

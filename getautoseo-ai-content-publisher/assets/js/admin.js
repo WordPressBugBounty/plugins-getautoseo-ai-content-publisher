@@ -160,18 +160,19 @@
         initModals: function() {
             // Article detail modal
             if ($('#autoseo-article-modal').length === 0) {
+                var s = autoseo_ajax.strings;
                 $('body').append(`
                     <div id="autoseo-article-modal" class="autoseo-modal">
                         <div class="autoseo-modal-content">
                             <div class="autoseo-modal-header">
-                                <h2 id="autoseo-modal-title">Article Details</h2>
+                                <h2 id="autoseo-modal-title">${s.article_details}</h2>
                                 <button class="autoseo-modal-close">&times;</button>
                             </div>
                             <div class="autoseo-modal-body" id="autoseo-modal-content">
                                 <!-- Article content will be loaded here -->
                             </div>
                             <div class="autoseo-modal-footer">
-                                <button class="autoseo-button-secondary autoseo-modal-close">Close</button>
+                                <button class="autoseo-button-secondary autoseo-modal-close">${s.close}</button>
                             </div>
                         </div>
                     </div>
@@ -196,7 +197,7 @@
             const $button = $(this);
             const originalText = $button.text();
 
-            $button.prop('disabled', true).html('<span class="autoseo-loading"></span> Testing...');
+            $button.prop('disabled', true).html('<span class="autoseo-loading"></span> ' + autoseo_ajax.strings.testing);
 
             $.ajax({
                 url: ajaxurl,
@@ -207,13 +208,13 @@
                 },
                 success: function(response) {
                     if (response.success) {
-                        AutoSEO_Admin.showNotice('Connection successful! ' + response.data.message, 'success');
+                        AutoSEO_Admin.showNotice(autoseo_ajax.strings.connection_success + ' ' + response.data.message, 'success');
                     } else {
-                        AutoSEO_Admin.showNotice('Connection failed: ' + response.data.message, 'error');
+                        AutoSEO_Admin.showNotice(autoseo_ajax.strings.connection_failed + ': ' + response.data.message, 'error');
                     }
                 },
                 error: function() {
-                    AutoSEO_Admin.showNotice('Connection failed. Please check your settings.', 'error');
+                    AutoSEO_Admin.showNotice(autoseo_ajax.strings.connection_failed, 'error');
                 },
                 complete: function() {
                     $button.prop('disabled', false).text(originalText);
@@ -245,20 +246,19 @@
                         AutoSEO_Admin.debug.info('✅ Sync successful, synced count:', syncedCount);
                         
                         AutoSEO_Admin.showNotice(
-                            'Articles synced successfully! ' + syncedCount + ' articles imported.',
+                            autoseo_ajax.strings.sync_success + ' ' + autoseo_ajax.strings.articles_synced.replace('%d', syncedCount),
                             'success'
                         );
-                        // Reload the page to show new articles
                         setTimeout(function() {
                             window.location.reload();
                         }, 1500);
                     } else {
                         AutoSEO_Admin.debug.error('❌ Sync failed:', response.data);
-                        AutoSEO_Admin.showNotice('Sync failed: ' + response.data.message, 'error');
+                        AutoSEO_Admin.showNotice(autoseo_ajax.strings.sync_failed + ': ' + response.data.message, 'error');
                     }
                 },
                 error: function() {
-                    AutoSEO_Admin.showNotice('Sync failed. Please try again.', 'error');
+                    AutoSEO_Admin.showNotice(autoseo_ajax.strings.sync_failed, 'error');
                 },
                 complete: function() {
                     $button.prop('disabled', false).text(originalText);
@@ -276,11 +276,11 @@
             const articleId = $button.data('article-id');
             const originalText = $button.text();
 
-            if (!confirm('Are you sure you want to publish this article?')) {
+            if (!confirm(autoseo_ajax.strings.confirm_publish)) {
                 return;
             }
 
-            $button.prop('disabled', true).html('<span class="autoseo-loading"></span> Publishing...');
+            $button.prop('disabled', true).html('<span class="autoseo-loading"></span> ' + autoseo_ajax.strings.publishing);
 
             $.ajax({
                 url: ajaxurl,
@@ -292,14 +292,14 @@
                 },
                 success: function(response) {
                     if (response.success) {
-                        AutoSEO_Admin.showNotice('Article published successfully!', 'success');
+                        AutoSEO_Admin.showNotice(autoseo_ajax.strings.publish_success, 'success');
                         $button.closest('tr').fadeOut();
                     } else {
-                        AutoSEO_Admin.showNotice('Publish failed: ' + response.data.message, 'error');
+                        AutoSEO_Admin.showNotice(autoseo_ajax.strings.publish_failed + ': ' + response.data.message, 'error');
                     }
                 },
                 error: function() {
-                    AutoSEO_Admin.showNotice('Publish failed. Please try again.', 'error');
+                    AutoSEO_Admin.showNotice(autoseo_ajax.strings.publish_failed, 'error');
                 },
                 complete: function() {
                     $button.prop('disabled', false).text(originalText);
@@ -318,15 +318,15 @@
             }).get();
 
             if (selectedArticles.length === 0) {
-                AutoSEO_Admin.showNotice('Please select articles to publish.', 'warning');
+                AutoSEO_Admin.showNotice(autoseo_ajax.strings.select_articles, 'warning');
                 return;
             }
 
-            if (!confirm('Are you sure you want to publish ' + selectedArticles.length + ' articles?')) {
+            if (!confirm(autoseo_ajax.strings.confirm_bulk.replace('%d', selectedArticles.length))) {
                 return;
             }
 
-            AutoSEO_Admin.showNotice('Bulk publish functionality is not yet available.', 'info');
+            AutoSEO_Admin.showNotice(autoseo_ajax.strings.not_available, 'info');
         },
 
         /**
@@ -339,11 +339,11 @@
             const articleId = $button.data('article-id');
             const articleTitle = $button.data('article-title');
 
-            if (!confirm('Are you sure you want to delete "' + articleTitle + '"? This action cannot be undone.')) {
+            if (!confirm(autoseo_ajax.strings.confirm_delete.replace('%s', articleTitle))) {
                 return;
             }
 
-            AutoSEO_Admin.showNotice('Delete functionality is not yet available.', 'info');
+            AutoSEO_Admin.showNotice(autoseo_ajax.strings.not_available, 'info');
         },
 
         /**
@@ -354,7 +354,7 @@
 
             const articleId = $(this).data('article-id');
 
-            AutoSEO_Admin.showNotice('Article detail view is not yet available.', 'info');
+            AutoSEO_Admin.showNotice(autoseo_ajax.strings.not_available, 'info');
         },
 
         /**
@@ -368,13 +368,12 @@
 
             navigator.clipboard.writeText(textToCopy).then(function() {
                 const originalText = $element.text();
-                $element.text('Copied!');
+                $element.text(autoseo_ajax.strings.copied);
                 setTimeout(function() {
                     $element.text(originalText);
                 }, 2000);
             }).catch(function(err) {
-                // Fallback for older browsers
-                const textArea = document.createElement('textarea');
+                var textArea = document.createElement('textarea');
                 textArea.value = textToCopy;
                 document.body.appendChild(textArea);
                 textArea.focus();
@@ -382,12 +381,12 @@
 
                 try {
                     document.execCommand('copy');
-                    $element.text('Copied!');
+                    $element.text(autoseo_ajax.strings.copied);
                     setTimeout(function() {
-                        $element.text('Copied!');
+                        $element.text(autoseo_ajax.strings.copied);
                     }, 2000);
                 } catch (err) {
-                    AutoSEO_Admin.showNotice('Failed to copy to clipboard.', 'error');
+                    AutoSEO_Admin.showNotice(autoseo_ajax.strings.copy_failed, 'error');
                 }
 
                 document.body.removeChild(textArea);
@@ -400,11 +399,11 @@
         regenerateApiKey: function(e) {
             e.preventDefault();
 
-            if (!confirm('Are you sure you want to regenerate your API key? This will invalidate the current key.')) {
+            if (!confirm(autoseo_ajax.strings.confirm_regen_key)) {
                 return;
             }
 
-            AutoSEO_Admin.showNotice('API key regeneration is not yet available.', 'info');
+            AutoSEO_Admin.showNotice(autoseo_ajax.strings.not_available, 'info');
         },
 
         /**
@@ -423,14 +422,13 @@
                 },
                 success: function(response) {
                     if (response.success) {
-                        const status = enabled ? 'enabled' : 'disabled';
-                        AutoSEO_Admin.showNotice('Debug mode ' + status + ' successfully.', 'success');
+                        AutoSEO_Admin.showNotice(enabled ? autoseo_ajax.strings.debug_enabled : autoseo_ajax.strings.debug_disabled, 'success');
                     } else {
-                        AutoSEO_Admin.showNotice('Failed to update debug settings.', 'error');
+                        AutoSEO_Admin.showNotice(autoseo_ajax.strings.debug_update_failed, 'error');
                     }
                 },
                 error: function() {
-                    AutoSEO_Admin.showNotice('Failed to update debug settings.', 'error');
+                    AutoSEO_Admin.showNotice(autoseo_ajax.strings.debug_update_failed, 'error');
                 }
             });
         },
@@ -441,11 +439,11 @@
         clearSyncData: function(e) {
             e.preventDefault();
 
-            if (!confirm('Are you sure you want to clear all sync data? This action cannot be undone.')) {
+            if (!confirm(autoseo_ajax.strings.confirm_clear_sync)) {
                 return;
             }
 
-            AutoSEO_Admin.showNotice('Clear sync data functionality is not yet available.', 'info');
+            AutoSEO_Admin.showNotice(autoseo_ajax.strings.not_available, 'info');
         },
 
         /**
@@ -454,7 +452,7 @@
         exportSettings: function(e) {
             e.preventDefault();
 
-            AutoSEO_Admin.showNotice('Export settings functionality is not yet available.', 'info');
+            AutoSEO_Admin.showNotice(autoseo_ajax.strings.not_available, 'info');
         },
 
         /**
@@ -472,13 +470,13 @@
                 data: formData + '&action=autoseo_save_settings&nonce=' + autoseo_ajax.nonce,
                 success: function(response) {
                     if (response.success) {
-                        AutoSEO_Admin.showNotice('Settings saved successfully!', 'success');
+                        AutoSEO_Admin.showNotice(autoseo_ajax.strings.settings_saved, 'success');
                     } else {
-                        AutoSEO_Admin.showNotice('Failed to save settings: ' + response.data.message, 'error');
+                        AutoSEO_Admin.showNotice(autoseo_ajax.strings.settings_failed + ': ' + response.data.message, 'error');
                     }
                 },
                 error: function() {
-                    AutoSEO_Admin.showNotice('Failed to save settings. Please try again.', 'error');
+                    AutoSEO_Admin.showNotice(autoseo_ajax.strings.settings_failed, 'error');
                 }
             });
         },
@@ -551,7 +549,7 @@
                 }, function(response) {
                     if (response.success) {
                         const syncedCount = response.data.synced_count || 0;
-                        alert('Articles synced successfully!\n\n' + syncedCount + ' articles synced');
+                        alert(autoseo_ajax.strings.sync_success + '\n\n' + autoseo_ajax.strings.articles_synced.replace('%d', syncedCount));
                         location.reload();
                     } else {
                         var errorMsg = response.data.friendly_message || response.data.message;
@@ -559,7 +557,7 @@
                         location.reload();
                     }
                 }).fail(function() {
-                    alert(autoseo_ajax.strings.error + ': Sync failed');
+                    alert(autoseo_ajax.strings.error + ': ' + autoseo_ajax.strings.sync_failed);
                 }).always(function() {
                     $btn.prop('disabled', false).text(originalText);
                 });
@@ -571,7 +569,7 @@
                 const $btn = $(this);
                 const originalText = $btn.text();
 
-                if (!confirm('Are you sure you want to publish this article?')) {
+                if (!confirm(autoseo_ajax.strings.confirm_publish)) {
                     return;
                 }
 
@@ -583,13 +581,13 @@
                     nonce: autoseo_ajax.nonce
                 }, function(response) {
                     if (response.success) {
-                        alert('Article published successfully!');
+                        alert(autoseo_ajax.strings.publish_success);
                         location.reload();
                     } else {
                         alert(autoseo_ajax.strings.error + '\n\n' + response.data.message);
                     }
                 }).fail(function() {
-                    alert(autoseo_ajax.strings.error + ': Publish failed');
+                    alert(autoseo_ajax.strings.error + ': ' + autoseo_ajax.strings.publish_failed);
                 }).always(function() {
                     $btn.prop('disabled', false).text(originalText);
                 });
@@ -598,7 +596,7 @@
             // View article modal
             $(document).on('click', '.autoseo-view-btn', function() {
                 const articleId = $(this).data('article-id');
-                alert('Article detail view coming soon!');
+                alert(autoseo_ajax.strings.coming_soon);
             });
 
             // Modal close
@@ -633,8 +631,8 @@
                 AutoSEO_Admin.debug.info('AJAX URL:', ajaxurl);
                 AutoSEO_Admin.debug.info('Nonce:', autoseo_ajax.nonce);
 
-                $btn.prop('disabled', true).text('Testing...');
-                $status.html('<span style="color: #666;">Testing connection...</span>');
+                $btn.prop('disabled', true).text(autoseo_ajax.strings.testing);
+                $status.html('<span style="color: #666;">' + autoseo_ajax.strings.testing_connection + '</span>');
                 AutoSEO_Admin.debug.info('✅ Settings test button disabled and status updated');
 
                 const ajaxData = {
@@ -662,7 +660,7 @@
                         responseText: xhr.responseText,
                         error: error
                     });
-                    $status.html('<span style="color: #dc3232;">✗ Connection failed</span>');
+                    $status.html('<span style="color: #dc3232;">✗ ' + autoseo_ajax.strings.connection_failed + '</span>');
                 }).always(function() {
                     AutoSEO_Admin.debug.info('🔄 Settings: Restoring test button state');
                     $btn.prop('disabled', false).text(originalText);
@@ -672,10 +670,10 @@
 
             // Reset settings
             $('#reset-settings').on('click', function() {
-                if (!confirm('Are you sure you want to reset all settings to defaults? This action cannot be undone.')) {
+                if (!confirm(autoseo_ajax.strings.confirm_reset)) {
                     return;
                 }
-                alert('Reset settings functionality coming soon.');
+                alert(autoseo_ajax.strings.coming_soon);
             });
 
             // Enable debugging
@@ -690,10 +688,10 @@
                     if (response.success) {
                         location.reload();
                     } else {
-                        alert('Failed to update debug settings.');
+                        alert(autoseo_ajax.strings.debug_update_failed);
                     }
                 }).fail(function() {
-                    alert('Failed to update debug settings.');
+                    alert(autoseo_ajax.strings.debug_update_failed);
                 });
             });
         },
@@ -721,9 +719,9 @@
                 $('#bulk-publish-btn, #bulk-action-submit').prop('disabled', checkedCount === 0);
 
                 if (checkedCount > 0) {
-                    $('#bulk-publish-btn').text('Bulk Publish (' + checkedCount + ')');
+                    $('#bulk-publish-btn').text(autoseo_ajax.strings.bulk_publish_count.replace('%d', checkedCount));
                 } else {
-                    $('#bulk-publish-btn').text('Bulk Publish');
+                    $('#bulk-publish-btn').text(autoseo_ajax.strings.bulk_publish);
                 }
             }
 
@@ -742,13 +740,13 @@
                 }, function(response) {
                     if (response.success) {
                         const syncedCount = response.data.synced_count || 0;
-                        alert('Articles synced successfully!\n\n' + syncedCount + ' articles synced');
+                        alert(autoseo_ajax.strings.sync_success + '\n\n' + autoseo_ajax.strings.articles_synced.replace('%d', syncedCount));
                         location.reload();
                     } else {
                         alert(autoseo_ajax.strings.error + '\n\n' + response.data.message);
                     }
                 }).fail(function() {
-                    alert(autoseo_ajax.strings.error + ': Sync failed');
+                    alert(autoseo_ajax.strings.error + ': ' + autoseo_ajax.strings.sync_failed);
                 }).always(function() {
                     $btn.prop('disabled', false).text(originalText);
                 });
@@ -761,15 +759,15 @@
                 }).get();
 
                 if (selectedArticles.length === 0) {
-                    alert('Please select articles to publish.');
+                    alert(autoseo_ajax.strings.select_articles);
                     return;
                 }
 
-                if (!confirm('Are you sure you want to publish ' + selectedArticles.length + ' articles?')) {
+                if (!confirm(autoseo_ajax.strings.confirm_bulk.replace('%d', selectedArticles.length))) {
                     return;
                 }
 
-                alert('Bulk publish functionality coming soon!');
+                alert(autoseo_ajax.strings.coming_soon);
             });
 
             // Delete article
@@ -779,11 +777,11 @@
                 const articleId = $(this).data('article-id');
                 const articleTitle = $(this).data('article-title');
 
-                if (!confirm('Are you sure you want to delete "' + articleTitle + '"? This action cannot be undone.')) {
+                if (!confirm(autoseo_ajax.strings.confirm_delete.replace('%s', articleTitle))) {
                     return;
                 }
 
-                alert('Delete functionality coming soon!');
+                alert(autoseo_ajax.strings.coming_soon);
             });
 
             // View article
@@ -791,7 +789,7 @@
                 e.preventDefault();
 
                 const articleId = $(this).data('article-id');
-                alert('Article detail view coming soon!');
+                alert(autoseo_ajax.strings.coming_soon);
             });
         },
 
@@ -892,13 +890,11 @@
                         error: error
                     });
                     
-                    // Re-enable button
                     $btn.prop('disabled', false)
                         .removeClass('syncing')
                         .html(originalHtml);
                     
-                    // Show error message
-                    AutoSEO_Admin.showSyncErrorNotice('Sync failed. Please try again.');
+                    AutoSEO_Admin.showSyncErrorNotice(autoseo_ajax.strings.sync_failed);
                 }
             });
         });
@@ -935,11 +931,12 @@
      * Show sync success notice
      */
     AutoSEO_Admin.showSyncSuccessNotice = function(count) {
+        var s = autoseo_ajax.strings;
         const message = count > 0 
-            ? 'Successfully synced ' + count + ' article(s)! Your content is now up to date.'
-            : 'Sync completed successfully! Your content is up to date.';
+            ? s.sync_count_msg.replace('%d', count)
+            : s.sync_complete_msg;
         
-        const $successNotice = $('<div class="notice notice-success is-dismissible"><p><strong>Sync Complete!</strong><br>' + message + '</p></div>');
+        const $successNotice = $('<div class="notice notice-success is-dismissible"><p><strong>' + s.sync_complete + '</strong><br>' + message + '</p></div>');
         
         // Remove any existing sync notices
         $('.autoseo-sync-notice, .notice-success').remove();
@@ -957,7 +954,7 @@
      * Show sync error notice
      */
     AutoSEO_Admin.showSyncErrorNotice = function(errorMessage) {
-        const $errorNotice = $('<div class="notice notice-error is-dismissible"><p><strong>Sync Failed</strong><br>' + errorMessage + '</p></div>');
+        const $errorNotice = $('<div class="notice notice-error is-dismissible"><p><strong>' + autoseo_ajax.strings.sync_failed_title + '</strong><br>' + errorMessage + '</p></div>');
         
         // Remove any existing error notices
         $('.notice-error').remove();

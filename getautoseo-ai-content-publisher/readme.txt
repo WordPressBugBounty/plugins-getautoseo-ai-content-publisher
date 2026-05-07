@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.72
+Stable tag: 1.3.73
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.73 =
+* FIXED: Unchanged articles now retry missing hero image and infographic downloads instead of skipping forever after a failed first download.
 
 = 1.3.71 =
 * FIXED: Author box social link SVG icons could be stripped when saving an AutoSEO article from the WordPress admin editor (e.g. to add a Rank Math meta title). Content protection now guards against all save paths (Classic Editor, REST API, AJAX), not just the Classic Editor form submission.

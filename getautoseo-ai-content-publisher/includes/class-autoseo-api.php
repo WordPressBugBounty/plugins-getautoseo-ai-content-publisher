@@ -81,7 +81,7 @@ class AutoSEO_API {
      * @param array|null $pushed_articles Articles pushed directly from the server (bypasses API call)
      * @return array|WP_Error
      */
-    public function sync_articles($force_resync = false, $pushed_articles = null, $deleted_article_ids = null) {
+    public function sync_articles($force_resync = false, $pushed_articles = null, $deleted_article_ids = null, $auto_publish = null) {
         global $wpdb;
 
         if (empty($this->api_key) && $pushed_articles === null) {
@@ -146,7 +146,7 @@ class AutoSEO_API {
         }
 
         try {
-            return $this->do_sync_articles($force_resync, $pushed_articles, $deleted_article_ids);
+            return $this->do_sync_articles($force_resync, $pushed_articles, $deleted_article_ids, $auto_publish);
         } finally {
             // Release lock
             // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
@@ -161,7 +161,7 @@ class AutoSEO_API {
      * @param array|null $pushed_articles Articles pushed directly from the server (bypasses API call)
      * @return array|WP_Error
      */
-    private function do_sync_articles($force_resync = false, $pushed_articles = null, $deleted_article_ids_from_trigger = null) {
+    private function do_sync_articles($force_resync = false, $pushed_articles = null, $deleted_article_ids_from_trigger = null, $auto_publish_override = null) {
         global $wpdb;
 
         // In push mode, the server pushes images separately after articles are processed.
@@ -169,6 +169,11 @@ class AutoSEO_API {
         $is_push_mode = ($pushed_articles !== null && is_array($pushed_articles));
 
         $deleted_article_ids = is_array($deleted_article_ids_from_trigger) ? $deleted_article_ids_from_trigger : array();
+
+        // auto_publish: determines whether new articles should be published to WordPress
+        // or just stored in the sync table. Comes from either the API response (pull mode)
+        // or the trigger-sync request parameter (push mode).
+        $auto_publish = ($auto_publish_override !== null) ? $auto_publish_override : true;
 
         if ($is_push_mode) {
             $this->log_debug(sprintf('Processing %d pushed articles from server (no API call needed, images will be pushed separately)', count($pushed_articles)));
@@ -214,6 +219,11 @@ class AutoSEO_API {
                 ? $data['deleted_article_ids']
                 : array();
             $deleted_article_ids = array_unique(array_merge($deleted_article_ids, $api_deleted_ids));
+
+            // Server tells us whether auto-publish is enabled for this site
+            if (isset($data['auto_publish'])) {
+                $auto_publish = (bool) $data['auto_publish'];
+            }
         }
         $table_name = $wpdb->prefix . 'autoseo_articles';
         $synced_count = 0;
@@ -769,7 +779,8 @@ class AutoSEO_API {
                 }
 
                 // Auto-publish NEW articles (not already published ones)
-                if ($article_data['status'] === 'pending') {
+                // Only publish if the site has auto_publish enabled
+                if ($article_data['status'] === 'pending' && $auto_publish) {
                     $article_table_id = $existing ? $existing->id : $wpdb->insert_id;
                     
                     $publisher = new AutoSEO_Publisher();
@@ -785,6 +796,12 @@ class AutoSEO_API {
                             $publish_result->get_error_message()
                         );
                     }
+                } elseif ($article_data['status'] === 'pending' && !$auto_publish) {
+                    $synced_count++;
+                    $this->log_debug(sprintf(
+                        'Article "%s" synced but not published (auto_publish disabled)',
+                        $article['title']
+                    ));
                 }
 
             } catch (Exception $e) {

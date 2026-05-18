@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.74
+ * Version: 1.3.75
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.74');
+define('AUTOSEO_VERSION', '1.3.75');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -2507,14 +2507,20 @@ class AutoSEO_Plugin {
         // Check if post exists and restore from trash if needed
         if ($article->post_id) {
             $existing_post = get_post($article->post_id);
+
+            // Verify the post actually exists in the database with a direct query,
+            // bypassing WP's object cache which can return stale data for deleted posts.
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $db_post_status = $wpdb->get_var($wpdb->prepare(
+                "SELECT post_status FROM {$wpdb->posts} WHERE ID = %d AND post_type = 'post' LIMIT 1",
+                $article->post_id
+            ));
             
-            if ($existing_post) {
-                // Post exists - check if it's in trash
-                if ($existing_post->post_status === 'trash') {
-                    $this->log_debug("Restoring post {$article->post_id} from trash");
-                    
-                    // Restore from trash
+            if ($existing_post && $db_post_status) {
+                if ($db_post_status === 'trash' || $existing_post->post_status === 'trash') {
+                    $this->log_debug("Restoring post {$article->post_id} from trash (db_status: {$db_post_status})");
                     wp_untrash_post($article->post_id);
+                    wp_cache_delete($article->post_id, 'posts');
                 }
                 
                 // Update and republish the existing post
@@ -2539,10 +2545,19 @@ class AutoSEO_Plugin {
                     'published_url' => $result['published_url'],
                     'action' => 'republished',
                 ));
+            } else {
+                $this->log_debug(sprintf(
+                    'Post %d not found in database (get_post: %s, db_status: %s) — will create new post',
+                    $article->post_id,
+                    $existing_post ? 'cached' : 'null',
+                    $db_post_status ?: 'not found'
+                ));
+                wp_cache_delete($article->post_id, 'posts');
             }
         }
 
-        // Post doesn't exist - clear the post_id and create new
+        // Post doesn't exist or was phantom — clear the post_id, reset recreate_count, and create new
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $wpdb->update(
             $table_name,
             array('post_id' => null, 'status' => 'pending'),
@@ -2550,6 +2565,11 @@ class AutoSEO_Plugin {
             array('%d', '%s'),
             array('%d')
         );
+        // Reset recreate_count so auto-recovery doesn't block future syncs
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$table_name} SET recreate_count = 0 WHERE id = %d",
+            $article->id
+        ));
 
         // Publish as new post
         $publisher = new AutoSEO_Publisher();

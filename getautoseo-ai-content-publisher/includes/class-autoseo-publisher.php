@@ -77,9 +77,16 @@ class AutoSEO_Publisher {
             ));
 
             if ($article && $article->post_id) {
-                $existing_post = get_post($article->post_id);
-                if ($existing_post && $existing_post->post_status !== 'trash') {
-                    return $this->update_existing_article($article_table_id, $article, $existing_post, false, $skip_image_downloads);
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $db_status = $wpdb->get_var($wpdb->prepare(
+                    "SELECT post_status FROM {$wpdb->posts} WHERE ID = %d AND post_type = 'post' LIMIT 1",
+                    $article->post_id
+                ));
+                if ($db_status && $db_status !== 'trash') {
+                    $existing_post = get_post($article->post_id);
+                    if ($existing_post) {
+                        return $this->update_existing_article($article_table_id, $article, $existing_post, false, $skip_image_downloads);
+                    }
                 }
             }
 
@@ -105,8 +112,25 @@ class AutoSEO_Publisher {
         // Check if article already has a WordPress post linked
         if ($article->post_id) {
             $existing_post = get_post($article->post_id);
+            // Direct DB check bypasses WP object cache which can return stale/phantom posts
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $db_post_status = $wpdb->get_var($wpdb->prepare(
+                "SELECT post_status FROM {$wpdb->posts} WHERE ID = %d AND post_type = 'post' LIMIT 1",
+                $article->post_id
+            ));
+            if (!$db_post_status) {
+                $this->log_debug(sprintf(
+                    'Article "%s" (ID: %d) - WordPress post %d is phantom (cache says exists but DB says no), will create new post',
+                    $article->title,
+                    $article->autoseo_id,
+                    $article->post_id
+                ));
+                wp_cache_delete($article->post_id, 'posts');
+                $existing_post = null;
+            }
             if ($existing_post) {
-                if ($existing_post->post_status === 'trash') {
+                $effective_status = $db_post_status ?: $existing_post->post_status;
+                if ($effective_status === 'trash') {
                     $this->log_debug(sprintf(
                         'Article "%s" (ID: %d) - WordPress post %d is trashed, will create new post',
                         $article->title,
@@ -123,14 +147,25 @@ class AutoSEO_Publisher {
                     );
                 } else {
                     $this->log_debug(sprintf(
-                        'Article "%s" (ID: %d) already published - updating WordPress post (Post ID: %d, status: %s)',
+                        'Article "%s" (ID: %d) already published - updating WordPress post (Post ID: %d, status: %s, db_status: %s)',
                         $article->title,
                         $article->autoseo_id,
                         $article->post_id,
-                        $existing_post->post_status
+                        $existing_post->post_status,
+                        $db_post_status ?: 'unknown'
                     ));
                     return $this->update_existing_article($article_table_id, $article, $existing_post, false, $skip_image_downloads);
                 }
+            }
+            if (!$existing_post) {
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                $wpdb->update(
+                    $table_name,
+                    array('post_id' => null),
+                    array('id' => $article_table_id),
+                    array('%s'),
+                    array('%d')
+                );
             }
         }
 
@@ -871,6 +906,27 @@ class AutoSEO_Publisher {
             if (empty($result) || $result === 0) {
                 $this->log_debug('wp_update_post returned empty/zero for post ' . $existing_post->ID);
                 return new WP_Error('update_failed', __('WordPress post update returned invalid result', 'getautoseo-ai-content-publisher'));
+            }
+
+            // Verify the post is actually published in the DB after the update.
+            // wp_update_post can return the ID even when the underlying UPDATE
+            // affected 0 rows (phantom post scenario).
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $verify_status = $wpdb->get_var($wpdb->prepare(
+                "SELECT post_status FROM {$wpdb->posts} WHERE ID = %d LIMIT 1",
+                $result
+            ));
+            if ($verify_status !== 'publish') {
+                $this->log_debug(sprintf(
+                    'Post %d update appeared to succeed but post_status is "%s" (expected "publish") — post may be phantom',
+                    $result,
+                    $verify_status ?: 'NOT FOUND'
+                ));
+                return new WP_Error('phantom_post', sprintf(
+                    __('Post %d does not exist or is not published after update (status: %s)', 'getautoseo-ai-content-publisher'),
+                    $result,
+                    $verify_status ?: 'not found'
+                ));
             }
         }
         

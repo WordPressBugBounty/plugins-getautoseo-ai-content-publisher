@@ -518,7 +518,23 @@ class AutoSEO_API {
                         // FIRST: verify the WordPress post still exists and isn't trashed.
                         // This must run before the skip-unchanged check, otherwise trashed
                         // posts are never detected and the article stays in limbo forever.
+                        // Use a direct DB query alongside get_post() to bypass WP's object
+                        // cache which can return stale data for deleted/phantom posts.
                         $wp_post = get_post($existing->post_id);
+                        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        $db_post_status = $wpdb->get_var($wpdb->prepare(
+                            "SELECT post_status FROM {$wpdb->posts} WHERE ID = %d AND post_type = 'post' LIMIT 1",
+                            $existing->post_id
+                        ));
+                        if (!$db_post_status) {
+                            $wp_post = null;
+                            wp_cache_delete($existing->post_id, 'posts');
+                        } elseif ($db_post_status === 'trash') {
+                            $wp_post = get_post($existing->post_id);
+                            if ($wp_post) {
+                                $wp_post->post_status = 'trash';
+                            }
+                        }
                         if (!$wp_post || $wp_post->post_status === 'trash') {
                             // Before declaring this article trashed, fall back to a meta
                             // lookup by _autoseo_article_id. The sync table's post_id can

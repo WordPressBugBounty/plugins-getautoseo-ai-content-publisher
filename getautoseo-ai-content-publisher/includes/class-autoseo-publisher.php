@@ -827,6 +827,7 @@ class AutoSEO_Publisher {
             'post_title' => !empty($article->title) ? $article->title : $existing_post->post_title,
             'post_content' => $article->content,
             'post_excerpt' => isset($article->excerpt) ? $article->excerpt : '',
+            'post_status' => 'publish',
             'post_author' => $post_author,
             'meta_input' => array(
                 '_autoseo_article_id' => $article->autoseo_id,
@@ -869,9 +870,9 @@ class AutoSEO_Publisher {
             $title = !empty($article->title) ? $article->title : $existing_post->post_title;
             $wpdb->update(
                 $wpdb->posts,
-                array('post_title' => $title, 'post_author' => $post_author),
+                array('post_title' => $title, 'post_author' => $post_author, 'post_status' => 'publish'),
                 array('ID' => $existing_post->ID),
-                array('%s', '%d'),
+                array('%s', '%d', '%s'),
                 array('%d')
             );
             clean_post_cache($existing_post->ID);

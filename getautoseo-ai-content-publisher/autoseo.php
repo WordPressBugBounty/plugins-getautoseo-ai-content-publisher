@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.76
+ * Version: 1.3.77
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.76');
+define('AUTOSEO_VERSION', '1.3.77');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -109,7 +109,8 @@ class AutoSEO_Plugin {
         // Setup wizard
         add_action('admin_init', array($this, 'check_setup_wizard'));
         add_action('admin_menu', array($this, 'add_setup_menu'));
-        add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend_scripts'));
+        add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend_scripts'), 0);
+        add_action('wp_head', array($this, 'print_conversion_tracker_script'), 0);
 
         // LLM-friendly .md URL support
         add_action('init', array($this, 'register_md_rewrite_rules'));
@@ -504,6 +505,45 @@ class AutoSEO_Plugin {
             AUTOSEO_VERSION,
             true
         );
+    }
+
+    /**
+     * Print the conversion tracker as early as possible in wp_head.
+     *
+     * Enqueued head scripts print later in wp_head, so inline output here gives
+     * the tracker the best chance to install listeners before ad pixels fire.
+     */
+    public function print_conversion_tracker_script() {
+        if (is_admin()) {
+            return;
+        }
+
+        $api_key = get_option('autoseo_api_key', '');
+        if (empty($api_key)) {
+            return;
+        }
+
+        $script_path = AUTOSEO_PLUGIN_DIR . 'assets/js/conversion-tracker.js';
+        if (!file_exists($script_path) || !is_readable($script_path)) {
+            return;
+        }
+
+        $script_url = add_query_arg('ver', AUTOSEO_VERSION, AUTOSEO_PLUGIN_URL . 'assets/js/conversion-tracker.js');
+
+        echo "\n<script id=\"getautoseo-conversion-tracker\" src=\"" . esc_url($script_url) . "\" data-endpoint=\"" . esc_url(rest_url('autoseo/v1/conversion-event')) . "\" data-token=\"" . esc_attr($this->get_conversion_tracker_token()) . "\"></script>\n";
+    }
+
+    /**
+     * Build a short-lived token for anonymous conversion beacons.
+     */
+    private function get_conversion_tracker_token($bucket = null) {
+        $api_key = get_option('autoseo_api_key', '');
+        if (empty($api_key)) {
+            return '';
+        }
+
+        $bucket = $bucket ?: floor(time() / HOUR_IN_SECONDS);
+        return hash_hmac('sha256', site_url() . '|' . $bucket, $api_key);
     }
 
 
@@ -2069,6 +2109,14 @@ class AutoSEO_Plugin {
             'callback' => array($this, 'rest_push_image'),
             'permission_callback' => array($this, 'rest_api_permission_check'),
         ));
+
+        // Conversion event proxy - public endpoint called by frontend JS.
+        // Forwards events to the AutoSEO API server-side (keeps API key off the client).
+        register_rest_route('autoseo/v1', '/conversion-event', array(
+            'methods' => 'POST',
+            'callback' => array($this, 'rest_conversion_event_proxy'),
+            'permission_callback' => '__return_true',
+        ));
     }
 
     /**
@@ -2862,6 +2910,86 @@ class AutoSEO_Plugin {
         if ($debug_mode === '1') {
             error_log('[AutoSEO] ' . $message);
         }
+    }
+
+    /**
+     * REST proxy for conversion events.
+     * Frontend JS sends events here; this method forwards them to the AutoSEO API
+     * with the API key so it never appears in browser-visible JavaScript.
+     */
+    public function rest_conversion_event_proxy($request) {
+        $api_key = get_option('autoseo_api_key', '');
+        if (empty($api_key)) {
+            return new WP_REST_Response(array('error' => 'not_configured'), 200);
+        }
+
+        $origin = $request->get_header('Origin');
+        $referer = $request->get_header('Referer');
+        $allowed_hosts = array_map('strtolower', array_filter(array(
+            wp_parse_url(home_url(), PHP_URL_HOST),
+            wp_parse_url(site_url(), PHP_URL_HOST),
+        )));
+        $request_host = '';
+        if (!empty($origin)) {
+            $request_host = strtolower((string) wp_parse_url($origin, PHP_URL_HOST));
+        } elseif (!empty($referer)) {
+            $request_host = strtolower((string) wp_parse_url($referer, PHP_URL_HOST));
+        }
+
+        if (!empty($request_host) && !in_array($request_host, $allowed_hosts, true)) {
+            return new WP_REST_Response(array('error' => 'origin_not_allowed'), 403);
+        }
+
+        // Simple per-IP rate limiting via transients (60 requests/minute)
+        $ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : 'unknown';
+        $rate_key = 'autoseo_conv_rate_' . md5($ip);
+        $count = (int) get_transient($rate_key);
+        if ($count >= 60) {
+            return new WP_REST_Response(array('error' => 'rate_limited'), 429);
+        }
+        set_transient($rate_key, $count + 1, 60);
+
+        $body = $request->get_json_params();
+        if (empty($body['events']) || !is_array($body['events'])) {
+            return new WP_REST_Response(array('error' => 'invalid_payload'), 400);
+        }
+
+        $token = (isset($body['token']) && is_scalar($body['token'])) ? sanitize_text_field(wp_unslash((string) $body['token'])) : '';
+        $current_bucket = floor(time() / HOUR_IN_SECONDS);
+        $valid_tokens = array(
+            $this->get_conversion_tracker_token($current_bucket),
+            $this->get_conversion_tracker_token($current_bucket - 1),
+        );
+        if (empty($token) || (!hash_equals($valid_tokens[0], $token) && !hash_equals($valid_tokens[1], $token))) {
+            return new WP_REST_Response(array('error' => 'invalid_token'), 403);
+        }
+
+        // Cap at 20 events per request to match server-side validation
+        $body['events'] = array_slice($body['events'], 0, 20);
+        unset($body['token']);
+
+        $json_body = wp_json_encode($body);
+        $signature = hash_hmac('sha256', $json_body, $api_key);
+
+        $response = wp_remote_post($this->api_base_url . '/conversion-events', array(
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type' => 'application/json',
+                'X-AutoSEO-Plugin-Version' => AUTOSEO_VERSION,
+                'X-AutoSEO-Signature' => $signature,
+            ),
+            'body' => $json_body,
+            'timeout' => 10,
+        ));
+
+        if (is_wp_error($response)) {
+            return new WP_REST_Response(array('error' => 'upstream_error'), 502);
+        }
+
+        $status = wp_remote_retrieve_response_code($response);
+        $result = json_decode(wp_remote_retrieve_body($response), true);
+
+        return new WP_REST_Response($result ?: array('ok' => true), $status ?: 200);
     }
 
     /**

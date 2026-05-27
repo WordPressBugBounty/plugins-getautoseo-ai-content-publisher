@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.77
+Stable tag: 1.3.79
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.79 =
+* FIXED: WordPress subdirectory installs now report the public site URL for sync and verification, preventing 404 errors when publishing articles.
 
 = 1.3.74 =
 * FIXED: YouTube video embeds now display at full responsive size instead of being tiny (WordPress KSES was stripping inline positioning styles)

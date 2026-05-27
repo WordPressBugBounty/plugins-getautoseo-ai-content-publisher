@@ -192,7 +192,7 @@ class AutoSEO_API {
                     'Authorization' => 'Bearer ' . $this->api_key,
                     'Content-Type' => 'application/json',
                     'X-AutoSEO-Plugin-Version' => AUTOSEO_VERSION,
-                    'X-WordPress-Site-URL' => site_url(),
+                    'X-WordPress-Site-URL' => home_url(),
                 ),
                 'timeout' => 30,
             ));
@@ -980,7 +980,7 @@ class AutoSEO_API {
             'event' => $event,
             'data' => $data,
             'timestamp' => current_time('c'),
-            'wordpress_site_url' => site_url(),
+            'wordpress_site_url' => home_url(),
         );
 
         $json_body = wp_json_encode($payload);

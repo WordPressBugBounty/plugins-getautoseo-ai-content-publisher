@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.77
+ * Version: 1.3.79
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.77');
+define('AUTOSEO_VERSION', '1.3.79');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -2388,7 +2388,7 @@ class AutoSEO_Plugin {
             'success' => true,
             'challenge_response' => $challenge_token,
             'plugin_version' => AUTOSEO_VERSION,
-            'site_url' => site_url(),
+            'site_url' => home_url(),
             'wordpress_version' => get_bloginfo('version'),
         );
 
@@ -2406,7 +2406,7 @@ class AutoSEO_Plugin {
      * @return array|WP_Error Result of the verification attempt
      */
     public function attempt_auto_verification() {
-        $site_url = site_url();
+        $site_url = home_url();
         
         $this->log_debug("Attempting auto-verification for: " . $site_url);
 
@@ -2655,7 +2655,7 @@ class AutoSEO_Plugin {
         $pushed_articles = $request->get_param('articles');
         $deleted_article_ids = $request->get_param('deleted_article_ids');
         
-        $has_pushed = !empty($pushed_articles) && is_array($pushed_articles);
+        $has_pushed = is_array($pushed_articles);
         $has_deletions = !empty($deleted_article_ids) && is_array($deleted_article_ids);
         $mode = $has_pushed ? 'push' : 'pull';
         $article_count = $has_pushed ? count($pushed_articles) : 0;
@@ -2674,8 +2674,10 @@ class AutoSEO_Plugin {
 
         try {
             $api = new AutoSEO_API();
+            // Pull triggers must use the incremental sync cursor. Forcing a resync
+            // here makes large sites re-check every recent article in one request.
             $sync_result = $api->sync_articles(
-                true,
+                false,
                 $has_pushed ? $pushed_articles : null,
                 $has_deletions ? $deleted_article_ids : null,
                 $auto_publish

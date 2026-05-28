@@ -17,16 +17,25 @@
     if (!config.endpoint && currentScript.getAttribute) {
         config.endpoint = currentScript.getAttribute('data-endpoint') || '';
         config.token = currentScript.getAttribute('data-token') || '';
+        config.pageviewEndpoint = currentScript.getAttribute('data-pageview-endpoint') || '';
+        config.articleId = currentScript.getAttribute('data-article-id') || '';
     }
     if (!config.endpoint) return;
 
     var CONVERSION_EVENTS_GTAG = ['conversion', 'purchase'];
     var CONVERSION_EVENTS_FBQ = ['Purchase', 'Subscribe', 'CompleteRegistration', 'Lead', 'StartTrial'];
     var DATALAYER_EVENTS = ['purchase', 'conversion'];
+    var ATTRIBUTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+    var VISITOR_STORAGE_KEY = 'autoseo_visitor_id';
+    var ATTRIBUTION_STORAGE_KEY = 'autoseo_last_article_attribution';
 
     var queue = [];
     var flushTimer = null;
     var seen = {};
+    var visitorId = getVisitorId();
+
+    captureInboundAttribution();
+    recordCurrentArticleView();
 
     function dedupeKey(source, type, value) {
         return source + '|' + type + '|' + (value || '') + '|' + Math.floor(Date.now() / 2000);
@@ -39,20 +48,155 @@
 
         var val = params && params.value ? parseFloat(params.value) : null;
         if (val !== null && (isNaN(val) || !isFinite(val))) val = null;
+        var attribution = getStoredAttribution();
 
-        queue.push({
+        var event = {
             event_source: source,
             event_type: String(type).substring(0, 100),
             event_value: val,
             event_currency: params && (params.currency || params.Currency) || null,
             page_url: (location.pathname + location.search).substring(0, 500),
             referrer_url: document.referrer ? document.referrer.substring(0, 500) : null,
+            visitor_id: visitorId,
             timestamp: new Date().toISOString()
-        });
+        };
+
+        if (attribution) {
+            event.attributed_article_id = attribution.article_id;
+            event.article_viewed_at = attribution.viewed_at;
+            event.article_attribution_source = attribution.source || null;
+        }
+
+        queue.push(event);
 
         if (!flushTimer) {
             flushTimer = setTimeout(flush, 1500);
         }
+    }
+
+    function storageGet(key) {
+        try {
+            return localStorage.getItem(key);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function storageSet(key, value) {
+        try {
+            localStorage.setItem(key, value);
+        } catch (e) {}
+    }
+
+    function getVisitorId() {
+        var inbound = getQueryParam('autoseo_vid');
+        if (isValidVisitorId(inbound)) {
+            storageSet(VISITOR_STORAGE_KEY, inbound);
+            return inbound;
+        }
+
+        var existing = storageGet(VISITOR_STORAGE_KEY);
+        if (isValidVisitorId(existing)) return existing;
+
+        var generated = 'as_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 12);
+        storageSet(VISITOR_STORAGE_KEY, generated);
+        return generated;
+    }
+
+    function isValidVisitorId(value) {
+        return typeof value === 'string' && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value);
+    }
+
+    function getQueryParam(name) {
+        try {
+            return new URLSearchParams(window.location.search).get(name);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function captureInboundAttribution() {
+        var articleId = parseInt(getQueryParam('autoseo_aid'), 10);
+        if (!articleId || articleId < 1) return;
+
+        var viewedAt = getQueryParam('autoseo_avt') || new Date().toISOString();
+        var viewedTime = Date.parse(viewedAt);
+        if (!viewedTime || Date.now() - viewedTime > ATTRIBUTION_WINDOW_MS) return;
+
+        storeAttribution({
+            article_id: articleId,
+            viewed_at: new Date(viewedTime).toISOString(),
+            source: (getQueryParam('autoseo_src') || 'hosted_blog_link').substring(0, 50)
+        });
+    }
+
+    function recordCurrentArticleView() {
+        var articleId = parseInt(config.articleId, 10);
+        if (!articleId || articleId < 1) return;
+
+        var viewedAt = new Date().toISOString();
+        storeAttribution({
+            article_id: articleId,
+            viewed_at: viewedAt,
+            source: 'wordpress'
+        });
+        sendArticlePageview(articleId, viewedAt);
+    }
+
+    function storeAttribution(attribution) {
+        storageSet(ATTRIBUTION_STORAGE_KEY, JSON.stringify(attribution));
+    }
+
+    function getStoredAttribution() {
+        try {
+            var raw = storageGet(ATTRIBUTION_STORAGE_KEY);
+            if (!raw) return null;
+            var attribution = JSON.parse(raw);
+            var articleId = parseInt(attribution.article_id, 10);
+            var viewedTime = Date.parse(attribution.viewed_at);
+            if (!articleId || !viewedTime || Date.now() - viewedTime > ATTRIBUTION_WINDOW_MS) return null;
+            return {
+                article_id: articleId,
+                viewed_at: new Date(viewedTime).toISOString(),
+                source: attribution.source ? String(attribution.source).substring(0, 50) : null
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function sendArticlePageview(articleId, viewedAt) {
+        if (!config.pageviewEndpoint) return;
+
+        var sessionKey = 'autoseo_pv_sent_' + articleId + '_' + location.pathname;
+        try {
+            if (sessionStorage.getItem(sessionKey)) return;
+            sessionStorage.setItem(sessionKey, '1');
+        } catch (e) {}
+
+        var payload = JSON.stringify({
+            article_id: articleId,
+            visitor_id: visitorId,
+            page_url: (location.pathname + location.search).substring(0, 500),
+            referrer_url: document.referrer ? document.referrer.substring(0, 500) : null,
+            timestamp: viewedAt
+        });
+
+        try {
+            if (navigator.sendBeacon) {
+                var blob = new Blob([payload], { type: 'application/json' });
+                if (navigator.sendBeacon(config.pageviewEndpoint, blob)) return;
+            }
+            if (window.fetch) {
+                fetch(config.pageviewEndpoint, {
+                    method: 'POST',
+                    body: payload,
+                    headers: { 'Content-Type': 'application/json' },
+                    keepalive: true,
+                    credentials: 'same-origin'
+                }).catch(function () {});
+            }
+        } catch (e) {}
     }
 
     function flush() {

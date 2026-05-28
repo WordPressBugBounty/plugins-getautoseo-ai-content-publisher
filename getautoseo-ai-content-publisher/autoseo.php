@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.79
+ * Version: 1.3.80
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.79');
+define('AUTOSEO_VERSION', '1.3.80');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -529,8 +529,16 @@ class AutoSEO_Plugin {
         }
 
         $script_url = add_query_arg('ver', AUTOSEO_VERSION, AUTOSEO_PLUGIN_URL . 'assets/js/conversion-tracker.js');
+        $article_id = '';
+        if (is_singular('post')) {
+            $post = get_post();
+            if ($post && isset($post->ID)) {
+                $article_id = get_post_meta($post->ID, '_autoseo_article_id', true);
+                $article_id = $article_id ? (string) absint($article_id) : '';
+            }
+        }
 
-        echo "\n<script id=\"getautoseo-conversion-tracker\" src=\"" . esc_url($script_url) . "\" data-endpoint=\"" . esc_url(rest_url('autoseo/v1/conversion-event')) . "\" data-token=\"" . esc_attr($this->get_conversion_tracker_token()) . "\"></script>\n";
+        echo "\n<script id=\"getautoseo-conversion-tracker\" src=\"" . esc_url($script_url) . "\" data-endpoint=\"" . esc_url(rest_url('autoseo/v1/conversion-event')) . "\" data-pageview-endpoint=\"" . esc_url(rest_url('autoseo/v1/article-pageview')) . "\" data-token=\"" . esc_attr($this->get_conversion_tracker_token()) . "\" data-article-id=\"" . esc_attr($article_id) . "\"></script>\n";
     }
 
     /**
@@ -2117,6 +2125,14 @@ class AutoSEO_Plugin {
             'callback' => array($this, 'rest_conversion_event_proxy'),
             'permission_callback' => '__return_true',
         ));
+
+        // Article pageview proxy - public endpoint called by frontend JS.
+        // Forwards pageviews to AutoSEO server-side (keeps API key off the client).
+        register_rest_route('autoseo/v1', '/article-pageview', array(
+            'methods' => 'POST',
+            'callback' => array($this, 'rest_article_pageview_proxy'),
+            'permission_callback' => '__return_true',
+        ));
     }
 
     /**
@@ -2982,6 +2998,84 @@ class AutoSEO_Plugin {
             ),
             'body' => $json_body,
             'timeout' => 10,
+        ));
+
+        if (is_wp_error($response)) {
+            return new WP_REST_Response(array('error' => 'upstream_error'), 502);
+        }
+
+        $status = wp_remote_retrieve_response_code($response);
+        $result = json_decode(wp_remote_retrieve_body($response), true);
+
+        return new WP_REST_Response($result ?: array('ok' => true), $status ?: 200);
+    }
+
+    /**
+     * REST proxy for article pageviews.
+     * Frontend JS sends one pageview here; this method forwards it to AutoSEO
+     * with the API key so it never appears in browser-visible JavaScript.
+     */
+    public function rest_article_pageview_proxy($request) {
+        $api_key = get_option('autoseo_api_key', '');
+        if (empty($api_key)) {
+            return new WP_REST_Response(array('ok' => true), 200);
+        }
+
+        $origin = $request->get_header('Origin');
+        $referer = $request->get_header('Referer');
+        $allowed_hosts = array_map('strtolower', array_filter(array(
+            wp_parse_url(home_url(), PHP_URL_HOST),
+            wp_parse_url(site_url(), PHP_URL_HOST),
+        )));
+        $request_host = '';
+        if (!empty($origin)) {
+            $request_host = strtolower((string) wp_parse_url($origin, PHP_URL_HOST));
+        } elseif (!empty($referer)) {
+            $request_host = strtolower((string) wp_parse_url($referer, PHP_URL_HOST));
+        }
+
+        if (!empty($request_host) && !in_array($request_host, $allowed_hosts, true)) {
+            return new WP_REST_Response(array('error' => 'origin_not_allowed'), 403);
+        }
+
+        // Simple per-IP rate limiting via transients (300 requests/minute)
+        $ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : 'unknown';
+        $rate_key = 'autoseo_pv_rate_' . md5($ip);
+        $count = (int) get_transient($rate_key);
+        if ($count >= 300) {
+            return new WP_REST_Response(array('error' => 'rate_limited'), 429);
+        }
+        set_transient($rate_key, $count + 1, 60);
+
+        $body = $request->get_json_params();
+        if (empty($body) || !is_array($body)) {
+            return new WP_REST_Response(array('ok' => true), 200);
+        }
+
+        $payload = array(
+            'article_id' => isset($body['article_id']) ? absint($body['article_id']) : 0,
+            'visitor_id' => isset($body['visitor_id']) && is_scalar($body['visitor_id']) ? substr(sanitize_text_field(wp_unslash((string) $body['visitor_id'])), 0, 128) : '',
+            'page_url' => isset($body['page_url']) && is_scalar($body['page_url']) ? substr(sanitize_text_field(wp_unslash((string) $body['page_url'])), 0, 500) : null,
+            'referrer_url' => isset($body['referrer_url']) && is_scalar($body['referrer_url']) ? substr(sanitize_text_field(wp_unslash((string) $body['referrer_url'])), 0, 500) : null,
+            'timestamp' => isset($body['timestamp']) && is_scalar($body['timestamp']) ? sanitize_text_field(wp_unslash((string) $body['timestamp'])) : gmdate('c'),
+        );
+
+        if (!$payload['article_id'] || empty($payload['visitor_id'])) {
+            return new WP_REST_Response(array('ok' => true), 200);
+        }
+
+        $json_body = wp_json_encode($payload);
+        $signature = hash_hmac('sha256', $json_body, $api_key);
+
+        $response = wp_remote_post($this->api_base_url . '/article-pageviews', array(
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type' => 'application/json',
+                'X-AutoSEO-Plugin-Version' => AUTOSEO_VERSION,
+                'X-AutoSEO-Signature' => $signature,
+            ),
+            'body' => $json_body,
+            'timeout' => 5,
         ));
 
         if (is_wp_error($response)) {

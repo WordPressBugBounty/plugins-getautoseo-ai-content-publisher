@@ -340,14 +340,23 @@ class AutoSEO_Publisher {
         
         // Set the post date to the intended publication date from AutoSEO
         // This ensures blog posts show the correct date instead of the sync time
+        // If the date is in the future, cap to current time — WordPress auto-converts
+        // post_status from 'publish' to 'future' for future dates, which breaks publishing.
         if (!empty($article->intended_published_at)) {
-            // intended_published_at is stored in UTC/GMT format
-            $post_data['post_date_gmt'] = $article->intended_published_at;
-            // Convert GMT to local time for post_date
-            $post_data['post_date'] = get_date_from_gmt($article->intended_published_at);
+            $intended_gmt = $article->intended_published_at;
+            $now_gmt = gmdate('Y-m-d H:i:s');
+            if (strtotime($intended_gmt) > strtotime($now_gmt)) {
+                $this->log_debug(sprintf(
+                    'Intended date %s is in the future — using current time to avoid WordPress scheduling',
+                    $intended_gmt
+                ));
+                $intended_gmt = $now_gmt;
+            }
+            $post_data['post_date_gmt'] = $intended_gmt;
+            $post_data['post_date'] = get_date_from_gmt($intended_gmt);
             $this->log_debug(sprintf(
                 'Setting post date from AutoSEO: GMT=%s, Local=%s',
-                $article->intended_published_at,
+                $intended_gmt,
                 $post_data['post_date']
             ));
         }
@@ -835,9 +844,20 @@ class AutoSEO_Publisher {
             ),
         );
 
-        // Update post date if intended_published_at is provided and differs from current
+        // Update post date if intended_published_at is provided and differs from current.
+        // Cap to current time if in the future — WordPress auto-converts post_status
+        // from 'publish' to 'future' for future dates, which breaks force-republish.
         if (!empty($article->intended_published_at)) {
             $new_gmt = $article->intended_published_at;
+            $now_gmt = gmdate('Y-m-d H:i:s');
+            if (strtotime($new_gmt) > strtotime($now_gmt)) {
+                $this->log_debug(sprintf(
+                    'Intended date %s is in the future for post %d — using current time to avoid WordPress scheduling',
+                    $new_gmt,
+                    $existing_post->ID
+                ));
+                $new_gmt = $now_gmt;
+            }
             $current_gmt = $existing_post->post_date_gmt;
             if ($new_gmt !== $current_gmt) {
                 $post_data['post_date_gmt'] = $new_gmt;

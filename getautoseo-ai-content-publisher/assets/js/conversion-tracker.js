@@ -33,6 +33,7 @@
     var flushTimer = null;
     var seen = {};
     var visitorId = getVisitorId();
+    var currentArticleView = null;
 
     captureInboundAttribution();
     recordCurrentArticleView();
@@ -135,6 +136,13 @@
         if (!articleId || articleId < 1) return;
 
         var viewedAt = new Date().toISOString();
+        currentArticleView = {
+            articleId: articleId,
+            viewedAt: viewedAt,
+            startedAt: Date.now(),
+            pageviewSent: false,
+            timeOnPageSent: false
+        };
         storeAttribution({
             article_id: articleId,
             viewed_at: viewedAt,
@@ -177,9 +185,56 @@
         var payload = JSON.stringify({
             article_id: articleId,
             visitor_id: visitorId,
+            event_type: 'pageview',
             page_url: (location.pathname + location.search).substring(0, 500),
             referrer_url: document.referrer ? document.referrer.substring(0, 500) : null,
             timestamp: viewedAt
+        });
+
+        try {
+            if (navigator.sendBeacon) {
+                var blob = new Blob([payload], { type: 'application/json' });
+                if (navigator.sendBeacon(config.pageviewEndpoint, blob)) {
+                    markArticlePageviewSent(articleId);
+                    return;
+                }
+            }
+            if (window.fetch) {
+                fetch(config.pageviewEndpoint, {
+                    method: 'POST',
+                    body: payload,
+                    headers: { 'Content-Type': 'application/json' },
+                    keepalive: true,
+                    credentials: 'same-origin'
+                }).then(function (response) {
+                    if (response.ok) markArticlePageviewSent(articleId);
+                }).catch(function () {});
+            }
+        } catch (e) {}
+    }
+
+    function markArticlePageviewSent(articleId) {
+        if (!currentArticleView || currentArticleView.articleId !== articleId) return;
+        currentArticleView.pageviewSent = true;
+    }
+
+    function sendArticleTimeOnPage() {
+        if (!currentArticleView || !currentArticleView.pageviewSent || currentArticleView.timeOnPageSent) return;
+        if (!config.pageviewEndpoint) return;
+
+        var durationSeconds = Math.round((Date.now() - currentArticleView.startedAt) / 1000);
+        if (durationSeconds < 3) return;
+        if (durationSeconds > 3600) durationSeconds = 3600;
+
+        currentArticleView.timeOnPageSent = true;
+        var payload = JSON.stringify({
+            article_id: currentArticleView.articleId,
+            visitor_id: visitorId,
+            event_type: 'time_on_page',
+            duration_seconds: durationSeconds,
+            page_url: (location.pathname + location.search).substring(0, 500),
+            referrer_url: document.referrer ? document.referrer.substring(0, 500) : null,
+            timestamp: currentArticleView.viewedAt
         });
 
         try {
@@ -369,6 +424,7 @@
 
     // Flush on page unload
     try {
+        window.addEventListener('pagehide', sendArticleTimeOnPage);
         window.addEventListener('pagehide', flush);
         window.addEventListener('beforeunload', flush);
     } catch (e) {}

@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.82
+ * Version: 1.3.83
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.82');
+define('AUTOSEO_VERSION', '1.3.83');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -3055,12 +3055,25 @@ class AutoSEO_Plugin {
         $payload = array(
             'article_id' => isset($body['article_id']) ? absint($body['article_id']) : 0,
             'visitor_id' => isset($body['visitor_id']) && is_scalar($body['visitor_id']) ? substr(sanitize_text_field(wp_unslash((string) $body['visitor_id'])), 0, 128) : '',
+            'event_type' => isset($body['event_type']) && is_scalar($body['event_type']) ? sanitize_text_field(wp_unslash((string) $body['event_type'])) : 'pageview',
             'page_url' => isset($body['page_url']) && is_scalar($body['page_url']) ? substr(sanitize_text_field(wp_unslash((string) $body['page_url'])), 0, 500) : null,
             'referrer_url' => isset($body['referrer_url']) && is_scalar($body['referrer_url']) ? substr(sanitize_text_field(wp_unslash((string) $body['referrer_url'])), 0, 500) : null,
             'timestamp' => isset($body['timestamp']) && is_scalar($body['timestamp']) ? sanitize_text_field(wp_unslash((string) $body['timestamp'])) : gmdate('c'),
         );
 
+        if (!in_array($payload['event_type'], array('pageview', 'time_on_page'), true)) {
+            $payload['event_type'] = 'pageview';
+        }
+
+        if ($payload['event_type'] === 'time_on_page') {
+            $payload['duration_seconds'] = isset($body['duration_seconds']) ? absint($body['duration_seconds']) : 0;
+        }
+
         if (!$payload['article_id'] || empty($payload['visitor_id'])) {
+            return new WP_REST_Response(array('ok' => true), 200);
+        }
+
+        if ($payload['event_type'] === 'time_on_page' && ($payload['duration_seconds'] < 1 || $payload['duration_seconds'] > 3600)) {
             return new WP_REST_Response(array('ok' => true), 200);
         }
 

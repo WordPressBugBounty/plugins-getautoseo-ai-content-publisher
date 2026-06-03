@@ -877,16 +877,17 @@ class AutoSEO_Publisher {
         // for anyone who bookmarked or linked to the original URL.
 
         // If the user has edited this post with a page builder (Elementor, Divi,
-        // etc.) since we last published it, respect their changes: skip the
-        // content update and keep all page-builder meta intact.
+        // etc.) or manually changed the WordPress body since we last published
+        // it, respect their changes: skip the content update and keep user
+        // authored body content intact.
         $page_builder = self::has_page_builder_content($existing_post->ID);
+        $manual_content_override = get_post_meta($existing_post->ID, '_autoseo_manual_content_override', true);
 
-        if ($page_builder) {
-            // Only update title and meta — leave post_content, post_excerpt,
-            // and all page-builder meta completely untouched.  We avoid
-            // wp_update_post here because it merges with the existing row and
-            // re-runs content_save_pre (KSES) on the Elementor HTML, which
-            // could degrade the stored content over many syncs.
+        if ($page_builder || $manual_content_override) {
+            // Only update title and meta — leave post_content and post_excerpt
+            // untouched. We avoid wp_update_post here because it merges with
+            // the existing row and re-runs content_save_pre (KSES), which can
+            // degrade user-authored HTML over many syncs.
             $title = !empty($article->title) ? $article->title : $existing_post->post_title;
             $wpdb->update(
                 $wpdb->posts,
@@ -902,7 +903,7 @@ class AutoSEO_Publisher {
             $this->log_debug(sprintf(
                 'Post %d has %s edits — preserving user content, updating title + metadata only',
                 $existing_post->ID,
-                $page_builder
+                $page_builder ? $page_builder : 'manual WordPress content'
             ));
         } else {
             $this->clear_page_builder_meta($existing_post->ID);
@@ -1150,8 +1151,9 @@ class AutoSEO_Publisher {
             ));
         }
 
-        // Skip content-modifying operations when user has page-builder edits
-        if (!$page_builder) {
+        // Skip content-modifying operations when user has page-builder or
+        // manual WordPress body edits.
+        if (!$page_builder && !$manual_content_override) {
             // Handle author box thumbnail — download once and replace URL in content
             if (!$skip_image_downloads) {
                 $author_thumb_url = get_option('autoseo_author_box_remote_url', '');

@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.83
+ * Version: 1.3.84
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.83');
+define('AUTOSEO_VERSION', '1.3.84');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -3256,7 +3256,7 @@ class AutoSEO_Plugin {
                                 <?php esc_html_e('AutoSEO Managed Article', 'getautoseo-ai-content-publisher'); ?>
                             </h3>
                             <p style="margin: 0;">
-                                <?php esc_html_e('This article\'s content is managed by AutoSEO. You can edit the title, SEO settings, categories, and tags — any content changes will be ignored on save.', 'getautoseo-ai-content-publisher'); ?>
+                                <?php esc_html_e('You can edit this article here. If you change the body content in WordPress, AutoSEO will remember that and will not overwrite the body on future syncs. Title, SEO settings, categories, tags, and images can still sync from AutoSEO.', 'getautoseo-ai-content-publisher'); ?>
                             </p>
                         </div>
                     </div>
@@ -3283,22 +3283,21 @@ class AutoSEO_Plugin {
         ?>
         <script>
         jQuery(document).ready(function($) {
-            // Content textarea is readonly (text-mode fallback); visual TinyMCE
-            // stays editable so Rank Math / Yoast can analyze it for SEO scoring.
-            // Server-side filter discards any content changes on save.
-            $('#content').prop('readonly', true).css('background-color', '#f5f5f5');
+            // Keep the content editor available. If the user edits the body,
+            // server-side save handling marks the post as manually edited so
+            // future AutoSEO syncs preserve their WordPress changes.
 
             // Hide the "Move to Trash" link in the editor
             $('#delete-action').hide();
         });
         </script>
         <style>
-            /* Subtle indicator that content is managed, without blocking interaction */
+            /* Subtle indicator that WordPress edits are respected */
             body.post-php .autoseo-readonly-editor #postdivrich {
                 position: relative;
             }
             body.post-php .autoseo-readonly-editor #postdivrich::before {
-                content: "Content managed by AutoSEO — changes will not be saved";
+                content: "AutoSEO article: WordPress body edits will be preserved after saving";
                 display: block;
                 background: #e8f4fd;
                 color: #2980b9;
@@ -3446,10 +3445,10 @@ class AutoSEO_Plugin {
     }
 
     /**
-     * Preserve AutoSEO post content whenever a managed post is saved by
-     * anything OTHER than the plugin itself. TinyMCE, Gutenberg, REST API
-     * clients, and third-party plugins can all strip or modify inline SVGs
-     * (used for author-box social icons) and other AutoSEO markup.
+     * Detect manual body edits on AutoSEO posts. Earlier versions silently
+     * discarded content changes here, which made the WordPress editor appear
+     * broken. Now, a real body change marks the post as user-managed so later
+     * AutoSEO syncs keep the WordPress body intact.
      *
      * Bypassed when:
      *  - The plugin's own code sets $allow_content_update before writing.
@@ -3476,8 +3475,14 @@ class AutoSEO_Plugin {
         }
 
         $original_post = get_post($postarr['ID']);
-        if ($original_post) {
-            $data['post_content'] = $original_post->post_content;
+        if ($original_post && array_key_exists('post_content', $data)) {
+            $incoming_content = (string) $data['post_content'];
+            $original_content = (string) $original_post->post_content;
+
+            if ($incoming_content !== $original_content) {
+                update_post_meta($postarr['ID'], '_autoseo_manual_content_override', '1');
+                update_post_meta($postarr['ID'], '_autoseo_manual_content_override_at', current_time('mysql'));
+            }
         }
 
         return $data;

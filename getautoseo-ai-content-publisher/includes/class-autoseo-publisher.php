@@ -580,10 +580,12 @@ class AutoSEO_Publisher {
             $infographic_alt = $post->post_title;
         }
 
-        $infographic_html = wp_get_attachment_image($infographic_image_id, 'full', false, array(
-            'class' => 'autoseo-infographic-image',
-            'alt'   => $infographic_alt,
-        ));
+        $infographic_html = wp_get_attachment_image(
+            $infographic_image_id,
+            'full',
+            false,
+            $this->get_infographic_image_attributes($infographic_alt)
+        );
 
         if (empty($infographic_html)) {
             return;
@@ -620,6 +622,20 @@ class AutoSEO_Publisher {
         }
 
         $this->log_debug(sprintf('Baked infographic into post_content for post %d', $post_id));
+    }
+
+    /**
+     * Attributes that keep infographic images out of theme/plugin lazy loaders.
+     */
+    private function get_infographic_image_attributes($alt_text) {
+        return array(
+            'class'          => 'autoseo-infographic-image skip-lazy no-lazy',
+            'alt'            => $alt_text,
+            'loading'        => 'eager',
+            'decoding'       => 'async',
+            'data-no-lazy'   => '1',
+            'data-skip-lazy' => '1',
+        );
     }
 
     /**

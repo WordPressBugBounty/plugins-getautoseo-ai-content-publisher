@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.84
+ * Version: 1.3.85
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.84');
+define('AUTOSEO_VERSION', '1.3.85');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -3757,8 +3757,11 @@ class AutoSEO_Plugin {
         }
 
         // Content-based guard: check the filtered $content for the container class.
+        // Existing posts can have a baked infographic image from an older plugin
+        // version, so normalize it before returning.
         if (strpos($content, 'autoseo-infographic-container') !== false) {
-            return $content;
+            global $post;
+            return $this->normalize_infographic_image_markup($content, $post->ID ?? 0);
         }
 
         // Prevent multiple injections on the same page load
@@ -3800,10 +3803,12 @@ class AutoSEO_Plugin {
         }
 
         // Get the full image HTML
-        $infographic_html = wp_get_attachment_image($infographic_image_id, 'full', false, array(
-            'class' => 'autoseo-infographic-image',
-            'alt' => $infographic_alt
-        ));
+        $infographic_html = wp_get_attachment_image(
+            $infographic_image_id,
+            'full',
+            false,
+            $this->get_infographic_image_attributes($infographic_alt)
+        );
 
         if (!$infographic_html) {
             return $content;
@@ -3840,6 +3845,56 @@ class AutoSEO_Plugin {
         $already_injected[$post->ID] = true;
 
         return $content;
+    }
+
+    /**
+     * Attributes that keep infographic images out of theme/plugin lazy loaders.
+     */
+    private function get_infographic_image_attributes($alt_text) {
+        return array(
+            'class'          => 'autoseo-infographic-image skip-lazy no-lazy',
+            'alt'            => $alt_text,
+            'loading'        => 'eager',
+            'decoding'       => 'async',
+            'data-no-lazy'   => '1',
+            'data-skip-lazy' => '1',
+        );
+    }
+
+    /**
+     * Replace older baked infographic image markup with lazy-load-safe markup.
+     */
+    private function normalize_infographic_image_markup($content, $post_id) {
+        $infographic_image_id = $post_id ? get_post_meta($post_id, '_autoseo_infographic_image_id', true) : 0;
+        if (empty($infographic_image_id)) {
+            return $content;
+        }
+
+        $infographic_alt = get_post_meta($infographic_image_id, '_wp_attachment_image_alt', true);
+        if (empty($infographic_alt)) {
+            $infographic_alt = get_the_title($post_id);
+        }
+
+        $infographic_html = wp_get_attachment_image(
+            $infographic_image_id,
+            'full',
+            false,
+            $this->get_infographic_image_attributes($infographic_alt)
+        );
+
+        if (empty($infographic_html)) {
+            return $content;
+        }
+
+        $replacement = '<div class="autoseo-infographic-container">' . $infographic_html . '</div>';
+        $updated = preg_replace(
+            '/<div class="autoseo-infographic-container">\s*<img\b[^>]*>\s*<\/div>/is',
+            $replacement,
+            $content,
+            1
+        );
+
+        return $updated ?: $content;
     }
 
     /**

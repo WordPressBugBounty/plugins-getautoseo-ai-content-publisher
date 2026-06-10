@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.85
+ * Version: 1.3.86
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.85');
+define('AUTOSEO_VERSION', '1.3.86');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -156,6 +156,9 @@ class AutoSEO_Plugin {
 
         // Fix Key Takeaways HTML structure (runs earliest to fix stray </div> before other filters)
         add_filter('the_content', array($this, 'fix_key_takeaways_structure'), 3);
+
+        // Convert stale markdown-style headings before WordPress auto-paragraphs the content
+        add_filter('the_content', array($this, 'convert_markdown_headings_in_content'), 4);
 
         // Add anchor IDs to headings for TOC linking (runs early to ensure IDs exist)
         add_filter('the_content', array($this, 'add_heading_anchor_ids'), 5);
@@ -3686,6 +3689,59 @@ class AutoSEO_Plugin {
         if ($count > 0 && $replaced !== null) {
             return $replaced;
         }
+
+        return $content;
+    }
+
+    /**
+     * Convert stale Markdown-style headings in AutoSEO post content.
+     *
+     * Older syncs can leave lines like "## []()Heading" in post_content.
+     * This runs before wpautop so those lines become real headings instead of
+     * visible paragraph text on the published article.
+     */
+    public function convert_markdown_headings_in_content($content) {
+        if (!is_singular('post') || !in_the_loop() || !is_main_query()) {
+            return $content;
+        }
+
+        $post = get_post();
+        if (!$post || !get_post_meta($post->ID, '_autoseo_article_id', true)) {
+            return $content;
+        }
+
+        $convert_heading = function ($hashes, $heading_html, $fallback) {
+            $clean_heading = preg_replace('/[ \t]*(?:\[\]\(\)[ \t]*)+/', '', $heading_html);
+            if ($clean_heading !== null) {
+                $heading_html = $clean_heading;
+            }
+            $heading_html = trim($heading_html);
+            if ($heading_html === '') {
+                return $fallback;
+            }
+
+            $level = min(6, strlen($hashes));
+            return '<h' . $level . '>' . $heading_html . '</h' . $level . '>';
+        };
+
+        // Paragraph-wrapped variants, e.g. <p>## Heading</p>.
+        $content = preg_replace_callback(
+            '/<p\b[^>]*>\s*(#{2,6})[ \t]*(.*?)\s*<\/p>/is',
+            function ($matches) use ($convert_heading) {
+                return $convert_heading($matches[1], $matches[2], $matches[0]);
+            },
+            $content
+        ) ?? $content;
+
+        // Raw line variants, e.g. "## []()Heading", before WordPress applies wpautop.
+        $content = preg_replace_callback(
+            '/(^|[\r\n])([ \t]*)(#{2,6})[ \t]*((?:\[\]\(\)[ \t]*)*[^\r\n<][^\r\n]*)/m',
+            function ($matches) use ($convert_heading) {
+                $converted = $convert_heading($matches[3], $matches[4], $matches[3] . ' ' . $matches[4]);
+                return $matches[1] . $matches[2] . $converted;
+            },
+            $content
+        ) ?? $content;
 
         return $content;
     }

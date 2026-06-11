@@ -679,7 +679,9 @@ class AutoSEO_API {
                             }
                         }
 
-                        if ($api_updated_at > 0 && $synced_at_utc > 0 && $api_updated_at <= $synced_at_utc && !$missing_assets) {
+                        $force_content_update = !empty($article['force_content_update']);
+
+                        if ($api_updated_at > 0 && $synced_at_utc > 0 && $api_updated_at <= $synced_at_utc && !$missing_assets && !$force_content_update) {
                             if ($needs_url_confirmation) {
                                 $publisher = new AutoSEO_Publisher();
                                 $published_url = $publisher->get_post_permalink($wp_post->ID);
@@ -717,6 +719,9 @@ class AutoSEO_API {
                             "SELECT * FROM {$table_name} WHERE id = %d",
                             $existing->id
                         ));
+                        if ($refreshed_article) {
+                            $refreshed_article->force_content_update = $force_content_update;
+                        }
                         $update_result = $publisher->update_existing_article($existing->id, $refreshed_article, $wp_post, $skip_webhook, $is_push_mode);
                         if (!is_wp_error($update_result)) {
                             // In push mode, images are pushed separately by the server

@@ -325,7 +325,7 @@ class AutoSEO_Publisher {
         $post_data = array(
             'post_title' => $article->title,
             'post_name' => sanitize_title($article->title),
-            'post_content' => $article->content,
+            'post_content' => $this->normalize_youtube_embed_markup($article->content),
             'post_excerpt' => $article->excerpt,
             'post_status' => 'publish',
             'post_author' => $default_author,
@@ -597,19 +597,7 @@ class AutoSEO_Publisher {
             . '<div class="autoseo-infographic-container">' . $infographic_html . '</div>'
             . '<!-- /autoseo-infographic -->';
 
-        // Insert before the middle H2 heading (same logic as the_content filter)
-        preg_match_all('/<h2[^>]*>.*?<\/h2>/is', $content, $matches, PREG_OFFSET_CAPTURE);
-
-        if (empty($matches[0])) {
-            $content .= $infographic_block;
-        } else {
-            $headings = $matches[0];
-            $middle_index = (int) floor(count($headings) / 2);
-            $insert_position = $headings[$middle_index][1];
-            $content = substr($content, 0, $insert_position)
-                     . $infographic_block
-                     . substr($content, $insert_position);
-        }
+        $content = $this->insert_block_at_preferred_article_position($content, $infographic_block);
 
         AutoSEO_Plugin::allow_content_updates();
         try {
@@ -636,6 +624,149 @@ class AutoSEO_Publisher {
             'data-no-lazy'   => '1',
             'data-skip-lazy' => '1',
         );
+    }
+
+    /**
+     * Normalize YouTube iframe markup before storing it in post_content.
+     */
+    private function normalize_youtube_embed_markup($content) {
+        if (stripos($content, 'youtube') === false) {
+            return $content;
+        }
+
+        $blocks = array();
+        $content = preg_replace_callback(
+            '/<div\b[^>]*class=["\'][^"\']*\byoutube-embed\b[^"\']*["\'][^>]*>.*?<\/div>/is',
+            function($matches) use (&$blocks) {
+                $placeholder = '%%AUTOSEO_YOUTUBE_EMBED_' . count($blocks) . '%%';
+                $blocks[$placeholder] = $this->build_responsive_youtube_embed_from_html($matches[0]);
+                return $placeholder;
+            },
+            $content
+        );
+
+        $content = preg_replace_callback(
+            '/<iframe\b[^>]*src=["\']https?:\/\/(?:www\.)?youtube(?:-nocookie)?\.com\/embed\/[a-zA-Z0-9_-]{11}[^"\']*["\'][^>]*>.*?<\/iframe>/is',
+            function($matches) {
+                return $this->build_responsive_youtube_embed_from_html($matches[0]);
+            },
+            $content
+        );
+
+        return strtr($content, $blocks);
+    }
+
+    private function build_responsive_youtube_embed_from_html($html) {
+        if (!preg_match('/src=["\']([^"\']*youtube(?:-nocookie)?\.com\/embed\/[^"\']*)["\']/i', $html, $src_match)) {
+            return $html;
+        }
+
+        $title = 'Related Video';
+        if (preg_match('/title=["\']([^"\']*)["\']/i', $html, $title_match)) {
+            $title = html_entity_decode($title_match[1], ENT_QUOTES, 'UTF-8');
+        }
+
+        return $this->build_responsive_youtube_embed(
+            $this->normalize_youtube_embed_url(html_entity_decode($src_match[1], ENT_QUOTES, 'UTF-8')),
+            $title
+        );
+    }
+
+    private function normalize_youtube_embed_url($src) {
+        $src = trim(preg_replace('/^\/\//', 'https://', $src));
+
+        if (!preg_match('/youtube(?:-nocookie)?\.com\/embed\/([a-zA-Z0-9_-]{11})/i', $src, $id_match)) {
+            return $src;
+        }
+
+        $query = wp_parse_url($src, PHP_URL_QUERY);
+        $params = array();
+        if (!empty($query)) {
+            wp_parse_str($query, $params);
+        }
+        if (empty($params['rel'])) {
+            $params['rel'] = '0';
+        }
+
+        return 'https://www.youtube.com/embed/' . $id_match[1] . '?' . http_build_query($params, '', '&');
+    }
+
+    private function build_responsive_youtube_embed($src, $title) {
+        return '<div class="youtube-embed" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; margin: 1.5em 0;">'
+            . '<iframe src="' . esc_url($src) . '" title="' . esc_attr($title ?: 'Related Video') . '" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe>'
+            . '</div>';
+    }
+
+    private function insert_block_at_preferred_article_position($content, $block) {
+        $insert_position = $this->find_preferred_article_insert_position($content);
+        $block = rtrim($block) . "\n\n";
+
+        if ($insert_position === null) {
+            return rtrim($content) . "\n\n" . rtrim($block);
+        }
+
+        return substr($content, 0, $insert_position) . $block . substr($content, $insert_position);
+    }
+
+    private function find_preferred_article_insert_position($content) {
+        $content_length = strlen($content);
+        if ($content_length === 0) {
+            return null;
+        }
+
+        foreach (array('h2', 'h3') as $tag) {
+            $headings = $this->get_heading_matches($content, $tag);
+            $candidates = array_values(array_filter($headings, function($heading) {
+                return !$this->is_non_body_heading($heading['text']);
+            }));
+
+            if (!empty($candidates)) {
+                $target = $content_length * 0.5;
+                usort($candidates, function($a, $b) use ($target) {
+                    return abs($a['offset'] - $target) <=> abs($b['offset'] - $target);
+                });
+
+                return $candidates[0]['offset'];
+            }
+        }
+
+        return $this->fallback_paragraph_insert_position($content, $content_length);
+    }
+
+    private function get_heading_matches($content, $tag) {
+        preg_match_all('/<' . $tag . '[^>]*>(.*?)<\/' . $tag . '>/is', $content, $matches, PREG_OFFSET_CAPTURE);
+        $headings = array();
+
+        foreach (($matches[0] ?? array()) as $match) {
+            $headings[] = array(
+                'offset' => $match[1],
+                'text'   => trim(html_entity_decode(wp_strip_all_tags($match[0]), ENT_QUOTES, 'UTF-8')),
+            );
+        }
+
+        return $headings;
+    }
+
+    private function is_non_body_heading($heading) {
+        return preg_match('/\b(key\s*takeaways?|table\s*of\s*contents?|faq|frequently\s*asked|summary|conclusion|final\s*thoughts?|recap|wrap\s*up|references?|sources?)\b/i', $heading) === 1;
+    }
+
+    private function fallback_paragraph_insert_position($content, $content_length) {
+        preg_match_all('/<\/p>/i', $content, $paragraphs, PREG_OFFSET_CAPTURE);
+        if (empty($paragraphs[0])) {
+            return null;
+        }
+
+        $target = (int) floor($content_length * 0.45);
+        foreach ($paragraphs[0] as $paragraph) {
+            $position = $paragraph[1] + strlen($paragraph[0]);
+            if ($position >= $target) {
+                return $position;
+            }
+        }
+
+        $last = end($paragraphs[0]);
+        return $last ? $last[1] + strlen($last[0]) : null;
     }
 
     /**
@@ -850,7 +981,7 @@ class AutoSEO_Publisher {
         $post_data = array(
             'ID' => $existing_post->ID,
             'post_title' => !empty($article->title) ? $article->title : $existing_post->post_title,
-            'post_content' => $article->content,
+            'post_content' => $this->normalize_youtube_embed_markup($article->content),
             'post_excerpt' => isset($article->excerpt) ? $article->excerpt : '',
             'post_status' => 'publish',
             'post_author' => $post_author,
@@ -898,6 +1029,17 @@ class AutoSEO_Publisher {
         // authored body content intact.
         $page_builder = self::has_page_builder_content($existing_post->ID);
         $manual_content_override = get_post_meta($existing_post->ID, '_autoseo_manual_content_override', true);
+        $force_content_update = !empty($article->force_content_update);
+
+        if ($force_content_update && $manual_content_override && !$page_builder) {
+            delete_post_meta($existing_post->ID, '_autoseo_manual_content_override');
+            delete_post_meta($existing_post->ID, '_autoseo_manual_content_override_at');
+            $manual_content_override = false;
+            $this->log_debug(sprintf(
+                'Post %d manual content override cleared for forced AutoSEO dashboard update',
+                $existing_post->ID
+            ));
+        }
 
         if ($page_builder || $manual_content_override) {
             // Only update title and meta — leave post_content and post_excerpt
@@ -1518,38 +1660,88 @@ class AutoSEO_Publisher {
             update_post_meta($post_id, '_autoseo_faq_schema', $article->faq_schema);
         }
 
-        // Populate the active SEO plugin's native meta fields so the user
-        // doesn't have to re-enter title/description/keywords/social images.
+        // Populate every active SEO plugin's native fields. Some sites run
+        // multiple SEO plugins, and whichever one outputs wp_head needs data.
+        $seo_plugins_updated = 0;
         if ($this->is_yoast_active()) {
             $this->set_yoast_meta($post_id, $article);
+            $seo_plugins_updated++;
             $this->log_debug(sprintf(
                 'Set Yoast SEO meta for post %d - description: %d chars, primary keyword: %s',
                 $post_id,
                 strlen($article->meta_description ?? ''),
                 $article->keywords ?? 'none'
             ));
-        } elseif ($this->is_rank_math_active()) {
+        }
+        if ($this->is_rank_math_active()) {
             $this->set_rank_math_meta($post_id, $article);
+            $seo_plugins_updated++;
             $this->log_debug(sprintf(
                 'Set Rank Math SEO meta for post %d - description: %d chars, primary keyword: %s',
                 $post_id,
                 strlen($article->meta_description ?? ''),
                 $article->keywords ?? 'none'
             ));
-        } elseif ($this->is_seopress_active()) {
+        }
+        if ($this->is_seopress_active()) {
             $this->set_seopress_meta($post_id, $article);
+            $seo_plugins_updated++;
             $this->log_debug(sprintf(
                 'Set SEOPress meta for post %d - description: %d chars, primary keyword: %s',
                 $post_id,
                 strlen($article->meta_description ?? ''),
                 $article->keywords ?? 'none'
             ));
-        } else {
+        }
+        if ($this->is_aioseo_active()) {
+            $this->set_aioseo_meta($post_id, $article);
+            $seo_plugins_updated++;
+            $this->log_debug(sprintf(
+                'Set AIOSEO meta for post %d - description: %d chars',
+                $post_id,
+                strlen($article->meta_description ?? '')
+            ));
+        }
+        if ($this->is_smartcrawl_active()) {
+            $this->set_smartcrawl_meta($post_id, $article);
+            $seo_plugins_updated++;
+            $this->log_debug(sprintf(
+                'Set SmartCrawl meta for post %d - description: %d chars',
+                $post_id,
+                strlen($article->meta_description ?? '')
+            ));
+        }
+
+        if ($seo_plugins_updated === 0) {
             $this->log_debug(sprintf(
                 'No supported SEO plugin active - using custom meta for post %d',
                 $post_id
             ));
         }
+    }
+
+    /**
+     * Get the primary keyphrase to store in SEO plugin fields.
+     *
+     * @param object $article Article data from sync table
+     * @return string
+     */
+    private function get_focus_keyphrase($article) {
+        if (!empty($article->keywords)) {
+            $keywords_array = array_map('trim', explode(',', $article->keywords));
+            if (!empty($keywords_array[0])) {
+                return $keywords_array[0];
+            }
+        }
+
+        if (!empty($article->meta_keywords)) {
+            $meta_keywords_array = array_map('trim', explode(',', $article->meta_keywords));
+            if (!empty($meta_keywords_array[0])) {
+                return $meta_keywords_array[0];
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -1783,6 +1975,200 @@ class AutoSEO_Publisher {
     }
 
     /**
+     * Check if All in One SEO is active.
+     *
+     * @return bool
+     */
+    private function is_aioseo_active() {
+        return defined('AIOSEO_VERSION') ||
+               defined('AIOSEO_FILE') ||
+               class_exists('AIOSEO\\Plugin\\AIOSEO') ||
+               function_exists('aioseo');
+    }
+
+    /**
+     * Set All in One SEO meta fields.
+     *
+     * AIOSEO 4 stores the values it outputs in the aioseo_posts table, not in
+     * post_meta. We still write compatibility post_meta keys for integrations
+     * that read them, but the custom table update is what affects the page head.
+     *
+     * @param int $post_id WordPress post ID
+     * @param object $article Article data from sync table
+     */
+    private function set_aioseo_meta($post_id, $article) {
+        global $wpdb;
+
+        $title = get_the_title($post_id);
+        $description = $article->meta_description ?? '';
+
+        if (!empty($title)) {
+            update_post_meta($post_id, '_aioseo_title', $title);
+        }
+        if (!empty($description)) {
+            update_post_meta($post_id, '_aioseo_description', $description);
+        }
+        if (!empty($article->meta_keywords)) {
+            update_post_meta($post_id, '_aioseo_keywords', $article->meta_keywords);
+        }
+
+        $table_name = $wpdb->prefix . 'aioseo_posts';
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $table_exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name));
+        if ($table_exists !== $table_name) {
+            $this->log_debug(sprintf('AIOSEO table not found for post %d', $post_id));
+            return;
+        }
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $columns = $wpdb->get_col('SHOW COLUMNS FROM ' . esc_sql($table_name), 0);
+        if (empty($columns)) {
+            return;
+        }
+
+        $now = current_time('mysql');
+        $data = array(
+            'post_id' => (int) $post_id,
+            'title' => $title,
+            'description' => $description,
+            'keywords' => $article->meta_keywords ?? '',
+            'og_title' => $title,
+            'og_description' => $description,
+            'twitter_use_og' => 1,
+            'twitter_title' => $title,
+            'twitter_description' => $description,
+            'updated' => $now,
+        );
+
+        $thumbnail_id = get_post_thumbnail_id($post_id);
+        if ($thumbnail_id) {
+            $og_image_url = wp_get_attachment_image_url($thumbnail_id, 'full');
+            if ($og_image_url) {
+                $data['og_image_type'] = 'custom_image';
+                $data['og_image_url'] = $og_image_url;
+                $data['og_image_custom_url'] = $og_image_url;
+                $data['twitter_image_type'] = 'custom_image';
+                $data['twitter_image_url'] = $og_image_url;
+                $data['twitter_image_custom_url'] = $og_image_url;
+            }
+        }
+
+        $data = array_intersect_key($data, array_flip($columns));
+        if (empty($data)) {
+            return;
+        }
+
+        $formats = array();
+        foreach ($data as $key => $value) {
+            $formats[] = in_array($key, array('post_id', 'twitter_use_og'), true) ? '%d' : '%s';
+        }
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $existing_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$table_name} WHERE post_id = %d LIMIT 1", $post_id));
+
+        if ($existing_id) {
+            unset($data['post_id']);
+            $formats = array();
+            foreach ($data as $key => $value) {
+                $formats[] = ($key === 'twitter_use_og') ? '%d' : '%s';
+            }
+
+            if (empty($data)) {
+                return;
+            }
+
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $result = $wpdb->update(
+                $table_name,
+                $data,
+                array('post_id' => $post_id),
+                $formats,
+                array('%d')
+            );
+        } else {
+            if (in_array('created', $columns, true) && !isset($data['created'])) {
+                $data['created'] = $now;
+                $formats[] = '%s';
+            }
+
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+            $result = $wpdb->insert($table_name, $data, $formats);
+        }
+
+        if ($result === false) {
+            $this->log_debug(sprintf(
+                'Failed to set AIOSEO table data for post %d: %s',
+                $post_id,
+                $wpdb->last_error
+            ));
+        }
+    }
+
+    /**
+     * Check if SmartCrawl is active.
+     *
+     * @return bool
+     */
+    private function is_smartcrawl_active() {
+        return defined('SMARTCRAWL_VERSION') ||
+               defined('SMARTCRAWL_PLUGIN_VERSION') ||
+               class_exists('Smartcrawl_Loader') ||
+               class_exists('Smartcrawl_Controller_Hub');
+    }
+
+    /**
+     * Set SmartCrawl meta fields.
+     *
+     * @param int $post_id WordPress post ID
+     * @param object $article Article data from sync table
+     */
+    private function set_smartcrawl_meta($post_id, $article) {
+        $title = get_the_title($post_id);
+        $description = $article->meta_description ?? '';
+
+        if (!empty($title)) {
+            update_post_meta($post_id, '_wds_title', $title);
+        }
+        if (!empty($description)) {
+            update_post_meta($post_id, '_wds_metadesc', $description);
+        }
+
+        $opengraph = get_post_meta($post_id, '_wds_opengraph', true);
+        $opengraph = is_array($opengraph) ? $opengraph : array();
+        if (!empty($title)) {
+            $opengraph['title'] = $title;
+        }
+        if (!empty($description)) {
+            $opengraph['description'] = $description;
+        }
+
+        $thumbnail_id = get_post_thumbnail_id($post_id);
+        if ($thumbnail_id) {
+            $image_url = wp_get_attachment_image_url($thumbnail_id, 'full');
+            if ($image_url) {
+                $opengraph['images'] = array($image_url);
+            }
+        }
+
+        if (!empty($opengraph)) {
+            update_post_meta($post_id, '_wds_opengraph', $opengraph);
+        }
+
+        $twitter = get_post_meta($post_id, '_wds_twitter', true);
+        $twitter = is_array($twitter) ? $twitter : array();
+        if (!empty($title)) {
+            $twitter['title'] = $title;
+        }
+        if (!empty($description)) {
+            $twitter['description'] = $description;
+        }
+
+        if (!empty($twitter)) {
+            update_post_meta($post_id, '_wds_twitter', $twitter);
+        }
+    }
+
+    /**
      * Assign the correct WPML language to a post.
      *
      * Uses WPML's official wpml_set_element_language_details action which
@@ -1863,8 +2249,8 @@ class AutoSEO_Meta_Output {
      * output so we don't emit duplicate tags.
      *
      * Detects Yoast SEO, Rank Math, SEOPress, All in One SEO (AIOSEO),
-     * and The SEO Framework — all of which output their own og:/twitter:
-     * meta tags.
+     * SmartCrawl, and The SEO Framework - all of which output their own
+     * og:/twitter: meta tags.
      *
      * @return bool
      */
@@ -1883,6 +2269,10 @@ class AutoSEO_Meta_Output {
         }
         // All in One SEO (AIOSEO)
         if (defined('AIOSEO_VERSION') || defined('AIOSEO_FILE') || class_exists('AIOSEO\\Plugin\\AIOSEO')) {
+            return true;
+        }
+        // SmartCrawl
+        if (defined('SMARTCRAWL_VERSION') || defined('SMARTCRAWL_PLUGIN_VERSION') || class_exists('Smartcrawl_Loader')) {
             return true;
         }
         // The SEO Framework

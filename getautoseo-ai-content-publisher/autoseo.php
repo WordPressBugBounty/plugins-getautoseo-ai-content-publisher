@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.86
+ * Version: 1.3.88
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.86');
+define('AUTOSEO_VERSION', '1.3.88');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -162,6 +162,9 @@ class AutoSEO_Plugin {
 
         // Add anchor IDs to headings for TOC linking (runs early to ensure IDs exist)
         add_filter('the_content', array($this, 'add_heading_anchor_ids'), 5);
+
+        // Keep YouTube embeds responsive even when inline styles were stripped before sync.
+        add_filter('the_content', array($this, 'normalize_youtube_embed_markup'), 9);
 
         // Allow YouTube iframes and SVG icons in post content (WordPress strips these by default)
         add_filter('wp_kses_allowed_html', array($this, 'allow_autoseo_html_elements'), 10, 2);
@@ -2590,9 +2593,12 @@ class AutoSEO_Plugin {
                     wp_cache_delete($article->post_id, 'posts');
                 }
                 
-                // Update and republish the existing post
+                // Update and republish the existing post. Force resync is an
+                // explicit AutoSEO action, so it should refresh body content even
+                // if the post was previously marked as manually edited in WP.
+                $article->force_content_update = true;
                 $publisher = new AutoSEO_Publisher();
-                $result = $publisher->publish_article($article->id);
+                $result = $publisher->update_existing_article($article->id, $article, $existing_post);
                 
                 if (is_wp_error($result)) {
                     $this->log_debug("Force republish failed - publish error: " . $result->get_error_message());
@@ -3583,6 +3589,14 @@ class AutoSEO_Plugin {
      * WordPress strips display, flex, gap, etc. by default.
      */
     public function allow_additional_css_properties($styles) {
+        $styles[] = 'width';
+        $styles[] = 'height';
+        $styles[] = 'max-width';
+        $styles[] = 'min-height';
+        $styles[] = 'padding-bottom';
+        $styles[] = 'overflow';
+        $styles[] = 'margin';
+        $styles[] = 'border';
         $styles[] = 'display';
         $styles[] = 'gap';
         $styles[] = 'flex';
@@ -3604,6 +3618,77 @@ class AutoSEO_Plugin {
         $styles[] = 'bottom';
         $styles[] = 'z-index';
         return $styles;
+    }
+
+    /**
+     * Normalize YouTube iframe markup to a full-width responsive embed.
+     */
+    public function normalize_youtube_embed_markup($content) {
+        if (stripos($content, 'youtube') === false) {
+            return $content;
+        }
+
+        $blocks = array();
+        $content = preg_replace_callback(
+            '/<div\b[^>]*class=["\'][^"\']*\byoutube-embed\b[^"\']*["\'][^>]*>.*?<\/div>/is',
+            function($matches) use (&$blocks) {
+                $placeholder = '%%AUTOSEO_YOUTUBE_EMBED_' . count($blocks) . '%%';
+                $blocks[$placeholder] = $this->build_responsive_youtube_embed_from_html($matches[0]);
+                return $placeholder;
+            },
+            $content
+        );
+
+        $content = preg_replace_callback(
+            '/<iframe\b[^>]*src=["\']https?:\/\/(?:www\.)?youtube(?:-nocookie)?\.com\/embed\/[a-zA-Z0-9_-]{11}[^"\']*["\'][^>]*>.*?<\/iframe>/is',
+            function($matches) {
+                return $this->build_responsive_youtube_embed_from_html($matches[0]);
+            },
+            $content
+        );
+
+        return strtr($content, $blocks);
+    }
+
+    private function build_responsive_youtube_embed_from_html($html) {
+        if (!preg_match('/src=["\']([^"\']*youtube(?:-nocookie)?\.com\/embed\/[^"\']*)["\']/i', $html, $src_match)) {
+            return $html;
+        }
+
+        $title = 'Related Video';
+        if (preg_match('/title=["\']([^"\']*)["\']/i', $html, $title_match)) {
+            $title = html_entity_decode($title_match[1], ENT_QUOTES, 'UTF-8');
+        }
+
+        return $this->build_responsive_youtube_embed(
+            $this->normalize_youtube_embed_url(html_entity_decode($src_match[1], ENT_QUOTES, 'UTF-8')),
+            $title
+        );
+    }
+
+    private function normalize_youtube_embed_url($src) {
+        $src = trim(preg_replace('/^\/\//', 'https://', $src));
+
+        if (!preg_match('/youtube(?:-nocookie)?\.com\/embed\/([a-zA-Z0-9_-]{11})/i', $src, $id_match)) {
+            return $src;
+        }
+
+        $query = wp_parse_url($src, PHP_URL_QUERY);
+        $params = array();
+        if (!empty($query)) {
+            wp_parse_str($query, $params);
+        }
+        if (empty($params['rel'])) {
+            $params['rel'] = '0';
+        }
+
+        return 'https://www.youtube.com/embed/' . $id_match[1] . '?' . http_build_query($params, '', '&');
+    }
+
+    private function build_responsive_youtube_embed($src, $title) {
+        return '<div class="youtube-embed" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; margin: 1.5em 0;">'
+            . '<iframe src="' . esc_url($src) . '" title="' . esc_attr($title ?: 'Related Video') . '" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe>'
+            . '</div>';
     }
 
     /**
@@ -3873,30 +3958,7 @@ class AutoSEO_Plugin {
         // Wrap the infographic in a container
         $infographic_container = '<div class="autoseo-infographic-container">' . $infographic_html . '</div>';
 
-        // Insert before the middle H2 heading (matching Laravel ArticleController::insertInfographicHalfway)
-        // Use regex to find all H2 headings only (not H3)
-        preg_match_all('/<h2[^>]*>.*?<\/h2>/is', $content, $matches, PREG_OFFSET_CAPTURE);
-        
-        // If no H2 headings found, just append at the end
-        if (empty($matches[0])) {
-            return $content . $infographic_container;
-        }
-        
-        // Find the H2 heading closest to the middle
-        $headings = $matches[0];
-        $middle_index = (int) floor(count($headings) / 2);
-        
-        // Get the position of the middle H2 heading
-        // Note: preg_match_all returns byte offsets, so we need to use substr() here
-        // (not mb_substr) because the offset is in bytes. This is actually safe
-        // because we're splitting at the exact byte position the regex found.
-        $insert_position = $headings[$middle_index][1];
-        
-        // Insert the infographic before the middle H2 heading
-        // Using substr() is safe here because $insert_position is a byte offset from preg_match_all
-        $content = substr($content, 0, $insert_position) . 
-                   $infographic_container . 
-                   substr($content, $insert_position);
+        $content = $this->insert_block_at_preferred_article_position($content, $infographic_container);
 
         $already_injected[$post->ID] = true;
 
@@ -3951,6 +4013,78 @@ class AutoSEO_Plugin {
         );
 
         return $updated ?: $content;
+    }
+
+    private function insert_block_at_preferred_article_position($content, $block) {
+        $insert_position = $this->find_preferred_article_insert_position($content);
+        $block = rtrim($block) . "\n\n";
+
+        if ($insert_position === null) {
+            return rtrim($content) . "\n\n" . rtrim($block);
+        }
+
+        return substr($content, 0, $insert_position) . $block . substr($content, $insert_position);
+    }
+
+    private function find_preferred_article_insert_position($content) {
+        $content_length = strlen($content);
+        if ($content_length === 0) {
+            return null;
+        }
+
+        foreach (array('h2', 'h3') as $tag) {
+            $headings = $this->get_heading_matches($content, $tag);
+            $candidates = array_values(array_filter($headings, function($heading) {
+                return !$this->is_non_body_heading($heading['text']);
+            }));
+
+            if (!empty($candidates)) {
+                $target = $content_length * 0.5;
+                usort($candidates, function($a, $b) use ($target) {
+                    return abs($a['offset'] - $target) <=> abs($b['offset'] - $target);
+                });
+
+                return $candidates[0]['offset'];
+            }
+        }
+
+        return $this->fallback_paragraph_insert_position($content, $content_length);
+    }
+
+    private function get_heading_matches($content, $tag) {
+        preg_match_all('/<' . $tag . '[^>]*>(.*?)<\/' . $tag . '>/is', $content, $matches, PREG_OFFSET_CAPTURE);
+        $headings = array();
+
+        foreach (($matches[0] ?? array()) as $match) {
+            $headings[] = array(
+                'offset' => $match[1],
+                'text'   => trim(html_entity_decode(wp_strip_all_tags($match[0]), ENT_QUOTES, 'UTF-8')),
+            );
+        }
+
+        return $headings;
+    }
+
+    private function is_non_body_heading($heading) {
+        return preg_match('/\b(key\s*takeaways?|table\s*of\s*contents?|faq|frequently\s*asked|summary|conclusion|final\s*thoughts?|recap|wrap\s*up|references?|sources?)\b/i', $heading) === 1;
+    }
+
+    private function fallback_paragraph_insert_position($content, $content_length) {
+        preg_match_all('/<\/p>/i', $content, $paragraphs, PREG_OFFSET_CAPTURE);
+        if (empty($paragraphs[0])) {
+            return null;
+        }
+
+        $target = (int) floor($content_length * 0.45);
+        foreach ($paragraphs[0] as $paragraph) {
+            $position = $paragraph[1] + strlen($paragraph[0]);
+            if ($position >= $target) {
+                return $position;
+            }
+        }
+
+        $last = end($paragraphs[0]);
+        return $last ? $last[1] + strlen($last[0]) : null;
     }
 
     /**

@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.88
+Stable tag: 1.3.89
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,10 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.89 =
+* FIXED: Articles published to sites using the Enfold theme could appear blank on the front end. The Advanced Layout Builder was being flagged active without any layout data, so the theme rendered nothing instead of the article. The plugin now clears empty Enfold layout meta so posts display correctly, while still preserving real layouts created by users.
+* IMPROVED: Articles previously stored without paragraph formatting are automatically refreshed with properly formatted content on the next sync.
 
 = 1.3.79 =
 * FIXED: WordPress subdirectory installs now report the public site URL for sync and verification, preventing 404 errors when publishing articles.

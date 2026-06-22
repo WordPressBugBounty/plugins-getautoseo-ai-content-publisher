@@ -509,6 +509,9 @@ class AutoSEO_Publisher {
             $api->send_webhook('article_published', $webhook_data);
         }
 
+        // Enfold and similar themes can attach empty ALB meta during save_post hooks.
+        $this->clear_page_builder_meta($post_id);
+
         $this->log_debug(sprintf(
             'Article "%s" published successfully (Post ID: %d, URL: %s, webhook: %s)',
             $article->title,
@@ -1376,6 +1379,14 @@ class AutoSEO_Publisher {
             }
         }
 
+        // Enfold and similar themes can re-attach empty ALB meta during the
+        // save_post hooks fired by wp_update_post / bake_infographic above.
+        // Only clear when we actually managed the content — never when we are
+        // intentionally preserving a user's page-builder or manual edits.
+        if (!$page_builder && !$manual_content_override) {
+            $this->clear_page_builder_meta($existing_post->ID);
+        }
+
         $this->log_debug(sprintf(
             'Article "%s" updated successfully (Post ID: %d, URL: %s, webhook: %s)',
             $article->title,
@@ -1527,14 +1538,24 @@ class AutoSEO_Publisher {
             return 'Oxygen';
         }
 
+        // Enfold ALB: only treat as user-edited when actual layout data exists.
+        // Enfold can flag _aviaLayoutBuilder_active without clean data, which renders
+        // a blank page instead of falling back to post_content. Non-empty clean data
+        // is the reliable signal of a real user layout (the active flag value varies
+        // between Enfold versions), so key off that.
+        $enfold_layout = get_post_meta($post_id, '_aviaLayoutBuilderCleanData', true);
+        if (is_string($enfold_layout) && trim($enfold_layout) !== '') {
+            return 'Enfold';
+        }
+
         return false;
     }
 
     /**
      * Remove page-builder metadata so WordPress renders from post_content.
      *
-     * Covers Elementor, Divi Builder, WPBakery, Beaver Builder, Brizy, and
-     * Oxygen. Only deletes keys that actually exist to avoid unnecessary DB writes.
+     * Covers Elementor, Divi Builder, WPBakery, Beaver Builder, Brizy, Oxygen,
+     * and Enfold ALB. Only deletes keys that actually exist to avoid unnecessary DB writes.
      *
      * @param int $post_id WordPress post ID
      */
@@ -1565,6 +1586,10 @@ class AutoSEO_Publisher {
             // Oxygen
             'ct_builder_shortcodes',
             'ct_other_template',
+            // Enfold Advanced Layout Builder
+            '_aviaLayoutBuilder_active',
+            '_aviaLayoutBuilderCleanData',
+            '_avia_builder_shortcode_tree',
         );
 
         $cleared = array();

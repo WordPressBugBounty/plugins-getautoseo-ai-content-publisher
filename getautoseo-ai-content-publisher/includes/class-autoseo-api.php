@@ -681,6 +681,23 @@ class AutoSEO_API {
 
                         $force_content_update = !empty($article['force_content_update']);
 
+                        // Older syncs can leave markdown/plain text in post_content while the
+                        // API now sends proper HTML with paragraph tags. Re-push when the
+                        // stored post is missing paragraphs but incoming content has them.
+                        $stored_has_paragraphs = (bool) preg_match('/<p\b/i', $wp_post->post_content);
+                        $incoming_has_paragraphs = (bool) preg_match('/<p\b/i', $article['content'] ?? '');
+                        $needs_paragraph_repair = $incoming_has_paragraphs
+                            && !$stored_has_paragraphs
+                            && preg_match('/<(h[1-6]|div|ul|ol)\b/i', $wp_post->post_content);
+
+                        if ($needs_paragraph_repair) {
+                            $force_content_update = true;
+                            $this->log_debug(sprintf(
+                                'Article "%s" stored without paragraph tags — forcing content refresh',
+                                $article['title']
+                            ));
+                        }
+
                         if ($api_updated_at > 0 && $synced_at_utc > 0 && $api_updated_at <= $synced_at_utc && !$missing_assets && !$force_content_update) {
                             if ($needs_url_confirmation) {
                                 $publisher = new AutoSEO_Publisher();

@@ -253,6 +253,44 @@ class AutoSEO_API {
         // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table_name is safely constructed from $wpdb->prefix
         $is_first_sync = $wpdb->get_var("SELECT COUNT(*) FROM {$table_name}") == 0;
 
+        // Catch permalink structure changes made outside the normal settings UI
+        // (CLI/imports/security plugins) and the first run after a plugin upgrade.
+        // The settings hook schedules a scan too, but sync is a reliable fallback
+        // because it runs on every connected site.
+        //
+        // IMPORTANT: we only DETECT and SCHEDULE here. The actual rescan reports
+        // one webhook per published post, and send_webhook() is a blocking 15s
+        // request. Running it inline would fire N blocking calls during this sync
+        // request and time out on sites with many posts. Instead we defer to the
+        // background wp-cron handler (autoseo_rescan_published_urls), which works
+        // through posts in small batches and reschedules itself until done.
+        $current_permalink_structure = (string) get_option('permalink_structure', '');
+        $last_permalink_structure = get_option('autoseo_last_permalink_structure', null);
+        $permalink_uninitialized = ($last_permalink_structure === null || $last_permalink_structure === false);
+
+        if ($permalink_uninitialized || (string) $last_permalink_structure !== $current_permalink_structure) {
+            // Only start a fresh rescan if one isn't already pending for this exact
+            // structure. This preserves the background cursor (autoseo_permalink_rescan_after_id)
+            // so frequent syncs don't restart the scan from the beginning. We deliberately
+            // do NOT update autoseo_last_permalink_structure here: leaving it stale means
+            // sync keeps re-scheduling the cron (a retry safety net for sites whose wp-cron
+            // is unreliable), and the cron sets the baseline once it finishes cleanly.
+            $pending_permalink_structure = get_option('autoseo_pending_permalink_structure', null);
+            if ((string) $pending_permalink_structure !== $current_permalink_structure) {
+                update_option('autoseo_pending_permalink_structure', $current_permalink_structure, false);
+                update_option('autoseo_permalink_rescan_after_id', 0, false);
+            }
+
+            if (!wp_next_scheduled('autoseo_rescan_published_urls')) {
+                wp_schedule_single_event(time() + 30, 'autoseo_rescan_published_urls');
+            }
+
+            $this->log_debug(sprintf(
+                'Permalink structure %s during sync; scheduled background published URL rescan',
+                $permalink_uninitialized ? 'baseline initialization' : 'change detected'
+            ));
+        }
+
         // Pre-check column existence so INSERT/UPDATE never references
         // a column the local DB table doesn't have yet (handles upgrades
         // where the schema migration hasn't run).

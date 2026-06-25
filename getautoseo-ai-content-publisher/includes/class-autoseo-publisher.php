@@ -47,6 +47,108 @@ class AutoSEO_Publisher {
     }
 
     /**
+     * Re-check published AutoSEO post URLs and notify the API when WordPress now
+     * resolves a different permalink. This catches site-wide permalink structure
+     * changes that do not change individual post slugs.
+     *
+     * @param int  $limit Maximum posts to scan in one run.
+     * @param bool $force_report_untracked Send URL updates even when no last reported URL is stored.
+     * @param int  $after_id Continue scanning after this wp_autoseo_articles row ID.
+     * @return array
+     */
+    public function rescan_published_urls($limit = 500, $force_report_untracked = false, $after_id = 0) {
+        global $wpdb;
+
+        $api_key = get_option('autoseo_api_key', '');
+        if (empty($api_key)) {
+            return array('checked' => 0, 'updated' => 0, 'errors' => 0, 'last_id' => (int) $after_id, 'has_more' => false);
+        }
+
+        $table_name = $wpdb->prefix . 'autoseo_articles';
+        $limit = max(1, min((int) $limit, 1000));
+        $after_id = max(0, (int) $after_id);
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $articles = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, autoseo_id, post_id FROM {$table_name} WHERE status = %s AND id > %d AND post_id IS NOT NULL AND post_id != 0 ORDER BY id ASC LIMIT %d",
+            'published',
+            $after_id,
+            $limit
+        ));
+
+        if (empty($articles)) {
+            return array('checked' => 0, 'updated' => 0, 'errors' => 0, 'last_id' => $after_id, 'has_more' => false);
+        }
+
+        $api = new AutoSEO_API();
+        $checked = 0;
+        $updated = 0;
+        $errors = 0;
+        $last_id = $after_id;
+
+        foreach ($articles as $article) {
+            $last_id = max($last_id, (int) $article->id);
+            $post_id = (int) $article->post_id;
+            $post = get_post($post_id);
+            if (!$post || $post->post_type !== 'post' || $post->post_status !== 'publish') {
+                continue;
+            }
+
+            $autoseo_id = get_post_meta($post_id, '_autoseo_article_id', true);
+            if (empty($autoseo_id)) {
+                $autoseo_id = $article->autoseo_id;
+            }
+            if (empty($autoseo_id)) {
+                continue;
+            }
+
+            $checked++;
+            $current_url = $this->get_published_url($post_id);
+            if (empty($current_url)) {
+                continue;
+            }
+
+            $last_reported_url = get_post_meta($post_id, '_autoseo_last_reported_url', true);
+            if (empty($last_reported_url) && !$force_report_untracked) {
+                update_post_meta($post_id, '_autoseo_last_reported_url', esc_url_raw($current_url));
+                continue;
+            }
+
+            if (!empty($last_reported_url) && $last_reported_url === $current_url) {
+                continue;
+            }
+
+            $result = $api->send_webhook('article_url_updated', array(
+                'article_id'        => (string) $autoseo_id,
+                'wordpress_post_id' => $post_id,
+                'published_url'     => $current_url,
+                'old_url'           => $last_reported_url ?: null,
+            ));
+
+            if (is_wp_error($result)) {
+                $errors++;
+                $this->log_debug(sprintf(
+                    'Published URL rescan failed for post %d: %s',
+                    $post_id,
+                    $result->get_error_message()
+                ));
+                continue;
+            }
+
+            update_post_meta($post_id, '_autoseo_last_reported_url', esc_url_raw($current_url));
+            $updated++;
+        }
+
+        return array(
+            'checked' => $checked,
+            'updated' => $updated,
+            'errors' => $errors,
+            'last_id' => $last_id,
+            'has_more' => count($articles) === $limit,
+        );
+    }
+
+    /**
      * Publish an article from the sync table to WordPress
      * 
      * @param int $article_table_id ID from wp_autoseo_articles table
@@ -504,9 +606,13 @@ class AutoSEO_Publisher {
 
         if (self::$batch_mode) {
             self::$batched_webhooks[] = $webhook_data;
+            update_post_meta($post_id, '_autoseo_last_reported_url', esc_url_raw($published_url));
         } else {
             $api = new AutoSEO_API();
-            $api->send_webhook('article_published', $webhook_data);
+            $result = $api->send_webhook('article_published', $webhook_data);
+            if (!is_wp_error($result)) {
+                update_post_meta($post_id, '_autoseo_last_reported_url', esc_url_raw($published_url));
+            }
         }
 
         // Enfold and similar themes can attach empty ALB meta during save_post hooks.
@@ -1373,9 +1479,13 @@ class AutoSEO_Publisher {
 
             if (self::$batch_mode) {
                 self::$batched_webhooks[] = $webhook_data;
+                update_post_meta($existing_post->ID, '_autoseo_last_reported_url', esc_url_raw($published_url));
             } else {
                 $api = new AutoSEO_API();
-                $api->send_webhook('article_published', $webhook_data);
+                $result = $api->send_webhook('article_published', $webhook_data);
+                if (!is_wp_error($result)) {
+                    update_post_meta($existing_post->ID, '_autoseo_last_reported_url', esc_url_raw($published_url));
+                }
             }
         }
 

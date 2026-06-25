@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.89
+ * Version: 1.3.91
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.89');
+define('AUTOSEO_VERSION', '1.3.91');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -128,7 +128,7 @@ class AutoSEO_Plugin {
         add_action('wp_ajax_autoseo_toggle_debug', array($this, 'ajax_toggle_debug'));
         add_action('wp_ajax_autoseo_auto_verify', array($this, 'ajax_attempt_auto_verification'));
 
-        // AutoSEO article edit protection (content read-only, meta boxes remain editable for Rank Math etc.)
+        // AutoSEO article edit protection (meta boxes remain editable for Rank Math, categories, tags, etc.)
         add_action('admin_notices', array($this, 'show_autoseo_edit_notice'));
         add_action('admin_head', array($this, 'add_autoseo_article_styles'));
         add_action('admin_footer', array($this, 'add_autoseo_content_readonly_script'));
@@ -177,6 +177,10 @@ class AutoSEO_Plugin {
 
         // Hook for when a published post's permalink changes (user edits slug)
         add_action('post_updated', array($this, 'handle_post_permalink_change'), 10, 3);
+
+        // Hook for site-wide permalink structure changes (e.g. dated URLs -> post name URLs)
+        add_action('update_option_permalink_structure', array($this, 'handle_permalink_structure_change'), 10, 2);
+        add_action('autoseo_rescan_published_urls', array($this, 'run_permalink_structure_rescan'));
 
         // Deferred rewrite rules flush (set during activation to avoid .htaccess issues on slow hosts)
         add_action('admin_init', array($this, 'maybe_flush_rewrite_rules'));
@@ -460,12 +464,9 @@ class AutoSEO_Plugin {
                             if ($row.find(".autoseo-managed").length > 0) {
                                 $row.attr("data-autoseo-article", "true");
                                 
-                                // Disable edit link
-                                $row.find(".row-actions .edit a").addClass("autoseo-edit-disabled").click(function(e) {
-                                    e.preventDefault();
-                                    alert("This article is managed by AutoSEO. Please edit it on your AutoSEO dashboard.");
-                                    return false;
-                                });
+                                // Keep the normal Edit link available so users can adjust
+                                // categories, permalink, SEO fields, and other archive-related
+                                // settings for AutoSEO-managed posts.
                             }
                         }
                     });
@@ -3167,7 +3168,8 @@ class AutoSEO_Plugin {
         }
 
         // Get the published URL
-        $published_url = get_permalink($post->ID);
+        $publisher = new AutoSEO_Publisher();
+        $published_url = $publisher->get_post_permalink($post->ID);
 
         // Mark webhook as sent to prevent future duplicates
         update_post_meta($post->ID, '_autoseo_webhook_sent', (string) time());
@@ -3179,6 +3181,9 @@ class AutoSEO_Plugin {
             'wordpress_post_id' => $post->ID,
             'published_url' => $published_url,
         ));
+        if (!is_wp_error($result)) {
+            update_post_meta($post->ID, '_autoseo_last_reported_url', esc_url_raw($published_url));
+        }
 
         // Log for debugging
         if (get_option('autoseo_debug_mode', '0') === '1') {
@@ -3211,7 +3216,8 @@ class AutoSEO_Plugin {
             return;
         }
 
-        $new_url = get_permalink($post_id);
+        $publisher = new AutoSEO_Publisher();
+        $new_url = $publisher->get_post_permalink($post_id);
         $old_url_approx = str_replace(
             '/' . $post_after->post_name . '/',
             '/' . $post_before->post_name . '/',
@@ -3219,12 +3225,15 @@ class AutoSEO_Plugin {
         );
 
         $api = new AutoSEO_API();
-        $api->send_webhook('article_url_updated', array(
+        $result = $api->send_webhook('article_url_updated', array(
             'article_id'        => $autoseo_article_id,
             'wordpress_post_id' => $post_id,
             'published_url'     => $new_url,
             'old_url'           => $old_url_approx,
         ));
+        if (!is_wp_error($result)) {
+            update_post_meta($post_id, '_autoseo_last_reported_url', esc_url_raw($new_url));
+        }
 
         if (get_option('autoseo_debug_mode', '0') === '1') {
             error_log(sprintf(
@@ -3234,6 +3243,67 @@ class AutoSEO_Plugin {
                 $post_before->post_name,
                 $post_after->post_name,
                 $new_url
+            ));
+        }
+    }
+
+    /**
+     * Schedule a published URL rescan when the site-wide permalink structure changes.
+     */
+    public function handle_permalink_structure_change($old_value, $new_value) {
+        if ($old_value === $new_value) {
+            return;
+        }
+
+        update_option('autoseo_pending_permalink_structure', (string) $new_value, false);
+        update_option('autoseo_permalink_rescan_after_id', 0, false);
+
+        if (!wp_next_scheduled('autoseo_rescan_published_urls')) {
+            wp_schedule_single_event(time() + 30, 'autoseo_rescan_published_urls');
+        }
+
+        if (get_option('autoseo_debug_mode', '0') === '1') {
+            error_log(sprintf(
+                'AutoSEO: Permalink structure changed from "%s" to "%s"; scheduled published URL rescan',
+                (string) $old_value,
+                (string) $new_value
+            ));
+        }
+    }
+
+    /**
+     * Rescan AutoSEO post URLs after a permalink structure change.
+     */
+    public function run_permalink_structure_rescan() {
+        if (!class_exists('AutoSEO_Publisher')) {
+            return;
+        }
+
+        $publisher = new AutoSEO_Publisher();
+        $after_id = (int) get_option('autoseo_permalink_rescan_after_id', 0);
+        // Keep the batch small: each reported URL is a blocking 15s webhook, so a
+        // large batch could exceed max_execution_time on a single cron run. The
+        // handler reschedules itself (every ~30s) until every post is checked.
+        $result = $publisher->rescan_published_urls(50, true, $after_id);
+
+        if (!empty($result['has_more'])) {
+            update_option('autoseo_permalink_rescan_after_id', (int) $result['last_id'], false);
+            wp_schedule_single_event(time() + 30, 'autoseo_rescan_published_urls');
+        } elseif (!empty($result['errors'])) {
+            update_option('autoseo_permalink_rescan_after_id', 0, false);
+        } else {
+            update_option('autoseo_last_permalink_structure', (string) get_option('permalink_structure', ''), false);
+            delete_option('autoseo_pending_permalink_structure');
+            delete_option('autoseo_permalink_rescan_after_id');
+        }
+
+        if (get_option('autoseo_debug_mode', '0') === '1') {
+            error_log(sprintf(
+                'AutoSEO: Permalink structure rescan batch completed; checked %d posts, sent %d URL updates, errors %d%s',
+                isset($result['checked']) ? (int) $result['checked'] : 0,
+                isset($result['updated']) ? (int) $result['updated'] : 0,
+                isset($result['errors']) ? (int) $result['errors'] : 0,
+                !empty($result['has_more']) ? '; more batches scheduled' : (!empty($result['errors']) ? '; will retry on next sync' : '')
             ));
         }
     }

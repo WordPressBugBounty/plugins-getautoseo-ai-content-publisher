@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.91
+ * Version: 1.3.92
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.91');
+define('AUTOSEO_VERSION', '1.3.92');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -1952,8 +1952,31 @@ class AutoSEO_Plugin {
             wp_die(esc_html__('Insufficient permissions', 'getautoseo-ai-content-publisher'));
         }
 
-        // Test connection logic here
-        wp_send_json_success(array('message' => __('Connection successful', 'getautoseo-ai-content-publisher')));
+        $api = new AutoSEO_API();
+        $result = $api->test_connection();
+
+        if (is_wp_error($result)) {
+            $error_message = $result->get_error_message();
+            AutoSEO_Scheduler::store_sync_error($error_message);
+            wp_send_json_error(array(
+                'message' => $error_message,
+            ));
+            return;
+        }
+
+        AutoSEO_Scheduler::clear_sync_error();
+
+        if (!get_option('autoseo_api_key_set_time')) {
+            update_option('autoseo_api_key_set_time', time());
+        }
+
+        wp_clear_scheduled_hook('autoseo_auto_sync');
+        wp_schedule_event(time(), 'every_minute', 'autoseo_auto_sync');
+
+        wp_send_json_success(array(
+            'message' => $result['message'] ?? __('Connection successful', 'getautoseo-ai-content-publisher'),
+            'next_sync' => wp_next_scheduled('autoseo_auto_sync'),
+        ));
     }
 
     public function ajax_sync_articles() {

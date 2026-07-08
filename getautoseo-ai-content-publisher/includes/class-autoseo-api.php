@@ -468,10 +468,11 @@ class AutoSEO_API {
                     }
                 }
 
-                // Skip articles that were trashed by the WordPress user.
-                // They stay in 'trashed' status until explicitly re-published
-                // from the AutoSEO dashboard (which would reset them to 'pending').
-                if ($existing && $existing->status === 'trashed') {
+                // Articles trashed by the WordPress user should not be published
+                // again during normal sync. In push mode, still refresh the local
+                // copy so dashboard edits are ready if the user later republishes.
+                $should_keep_trashed = $existing && $existing->status === 'trashed';
+                if ($should_keep_trashed && !$is_push_mode) {
                     $this->log_debug(sprintf(
                         'Skipping trashed article "%s" (trashed by WordPress user)',
                         $article['title']
@@ -482,7 +483,7 @@ class AutoSEO_API {
 
                 // Check if article already published to WordPress (has a post_id)
                 // Also treat 'publishing' status as already-in-progress to avoid race conditions
-                $is_already_published = $existing && (!empty($existing->post_id) || $existing->status === 'publishing');
+                $is_already_published = $existing && !$should_keep_trashed && (!empty($existing->post_id) || $existing->status === 'publishing');
                 
                 // Prepare article data
                 // If already published, keep 'published' status to avoid re-triggering publish_article()
@@ -514,7 +515,7 @@ class AutoSEO_API {
                     'hero_image_alt' => $this->sanitize_for_db($article['hero_image_alt'] ?? null),
                     'infographic_html' => $this->sanitize_for_db($article['infographic_html'] ?? null),
                     'infographic_image_url' => $article['infographic_image_url'] ?? null,
-                    'status' => $is_already_published ? 'published' : 'pending',
+                    'status' => $should_keep_trashed ? 'trashed' : ($is_already_published ? 'published' : 'pending'),
                     'synced_at' => current_time('mysql'),
                     'intended_published_at' => $intended_published_at,
                     'faq_schema' => isset($article['faq_schema']) ? wp_json_encode($article['faq_schema']) : null,
@@ -547,6 +548,15 @@ class AutoSEO_API {
                     if ($update_result === false) {
                         $this->log_debug('Database update failed: ' . $wpdb->last_error);
                         $errors[] = sprintf('Database update failed for article "%s": %s', $article['title'], $wpdb->last_error);
+                        continue;
+                    }
+
+                    if ($should_keep_trashed) {
+                        $this->log_debug(sprintf(
+                            'Updated local copy for trashed article "%s" without republishing',
+                            $article['title']
+                        ));
+                        $synced_count++;
                         continue;
                     }
                     

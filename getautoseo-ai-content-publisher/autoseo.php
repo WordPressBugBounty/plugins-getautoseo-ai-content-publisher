@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.92
+ * Version: 1.3.94
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.92');
+define('AUTOSEO_VERSION', '1.3.94');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -2621,6 +2621,7 @@ class AutoSEO_Plugin {
                 // explicit AutoSEO action, so it should refresh body content even
                 // if the post was previously marked as manually edited in WP.
                 $article->force_content_update = true;
+                $article->force_page_builder_content_update = true;
                 $publisher = new AutoSEO_Publisher();
                 $result = $publisher->update_existing_article($article->id, $article, $existing_post);
                 
@@ -3135,25 +3136,14 @@ class AutoSEO_Plugin {
     }
 
     /**
-     * Handle post status transitions (e.g., draft -> publish)
-     * This catches when users manually publish AutoSEO articles in WP admin
+     * Handle post status transitions for AutoSEO articles.
+     * This catches when users manually publish or trash AutoSEO articles in WP admin.
      * 
      * @param string $new_status New post status
      * @param string $old_status Old post status
      * @param WP_Post $post Post object
      */
     public function handle_post_status_transition($new_status, $old_status, $post) {
-        // Only care about transitions TO 'publish' status
-        if ($new_status !== 'publish') {
-            return;
-        }
-
-        // Only care if it's a new publish (not already published)
-        if ($old_status === 'publish') {
-            return;
-        }
-
-        // Only care about posts (not pages, attachments, etc.)
         if ($post->post_type !== 'post') {
             return;
         }
@@ -3162,6 +3152,16 @@ class AutoSEO_Plugin {
         $autoseo_article_id = get_post_meta($post->ID, '_autoseo_article_id', true);
         if (empty($autoseo_article_id)) {
             return; // Not an AutoSEO article
+        }
+
+        if ($new_status === 'trash' && $old_status !== 'trash') {
+            $this->handle_autoseo_article_trashed($post, $autoseo_article_id);
+            return;
+        }
+
+        // Only care about new publishes from this point on.
+        if ($new_status !== 'publish' || $old_status === 'publish') {
+            return;
         }
 
         // Skip if a sync is in progress — the batch will handle all webhooks
@@ -3216,6 +3216,54 @@ class AutoSEO_Plugin {
                 $autoseo_article_id,
                 $published_url
             ));
+        }
+    }
+
+    /**
+     * Mark a manually trashed AutoSEO post locally and notify AutoSEO.
+     */
+    private function handle_autoseo_article_trashed($post, $autoseo_article_id) {
+        global $wpdb, $autoseo_allow_trash;
+
+        // Dashboard-initiated deletion sets this flag while wp_trash_post() runs.
+        // That path already soft-deletes the article in AutoSEO, so don't send a
+        // manual trash webhook back for the same action.
+        if (!empty($autoseo_allow_trash)) {
+            return;
+        }
+
+        $table_name = $wpdb->prefix . 'autoseo_articles';
+
+        // Keep post_id so force-republish can restore this same WordPress post.
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $wpdb->update(
+            $table_name,
+            array('status' => 'trashed'),
+            array('autoseo_id' => (string) $autoseo_article_id),
+            array('%s'),
+            array('%s')
+        );
+
+        $api = new AutoSEO_API();
+        $result = $api->send_webhook('article_trashed', array(
+            'article_id' => (string) $autoseo_article_id,
+        ));
+
+        if (get_option('autoseo_debug_mode', '0') === '1') {
+            if (is_wp_error($result)) {
+                error_log(sprintf(
+                    'AutoSEO: Failed to send article_trashed webhook for post %d (AutoSEO ID: %s): %s',
+                    $post->ID,
+                    $autoseo_article_id,
+                    $result->get_error_message()
+                ));
+            } else {
+                error_log(sprintf(
+                    'AutoSEO: Sent article_trashed webhook for post %d (AutoSEO ID: %s)',
+                    $post->ID,
+                    $autoseo_article_id
+                ));
+            }
         }
     }
 
@@ -3470,9 +3518,6 @@ class AutoSEO_Plugin {
             // Remove inline/quick edit (content is managed by AutoSEO)
             unset($actions['inline hide-if-no-js']);
 
-            // Remove Trash link to prevent accidental deletion of managed articles
-            unset($actions['trash']);
-            
             // Keep the Edit link so users can access meta boxes (Rank Math, Yoast, categories, etc.)
             // Add note that it's managed by AutoSEO
             $actions['autoseo_note'] = '<span class="autoseo-edit-notice">' . __('Managed by AutoSEO', 'getautoseo-ai-content-publisher') . '</span>';
@@ -3485,9 +3530,8 @@ class AutoSEO_Plugin {
     }
 
     /**
-     * Prevent trashing AutoSEO articles via wp_trash_post().
-     * Returns false to short-circuit the trash (WP 5.5+).
-     * Allow programmatic trashing from our own sync code (which runs during REST/cron).
+     * Allow AutoSEO articles to be moved to trash from WordPress admin.
+     * The transition_post_status handler records the manual trash and notifies AutoSEO.
      *
      * @param bool|null $trash   Null to proceed, non-null to short-circuit.
      * @param WP_Post   $post   Post being trashed.
@@ -3499,16 +3543,8 @@ class AutoSEO_Plugin {
             return $trash;
         }
 
-        // Allow trashing when the AutoSEO sync explicitly requests it
-        // (article was deleted from the AutoSEO dashboard)
-        global $autoseo_allow_trash;
-        if (!empty($autoseo_allow_trash)) {
-            return $trash;
-        }
-
         if ($this->is_autoseo_article($post->ID)) {
-            $this->log_debug(sprintf('Blocked attempt to trash AutoSEO article (post ID: %d)', $post->ID));
-            return false;
+            $this->log_debug(sprintf('Allowing AutoSEO article to move to trash (post ID: %d)', $post->ID));
         }
 
         return $trash;

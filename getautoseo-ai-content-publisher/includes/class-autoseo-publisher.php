@@ -1139,6 +1139,16 @@ class AutoSEO_Publisher {
         $page_builder = self::has_page_builder_content($existing_post->ID);
         $manual_content_override = get_post_meta($existing_post->ID, '_autoseo_manual_content_override', true);
         $force_content_update = !empty($article->force_content_update);
+        $force_page_builder_content_update = !empty($article->force_page_builder_content_update);
+
+        if ($force_page_builder_content_update && $page_builder) {
+            $this->clear_page_builder_meta($existing_post->ID);
+            $this->log_debug(sprintf(
+                'Post %d page-builder metadata cleared for explicit AutoSEO force republish',
+                $existing_post->ID
+            ));
+            $page_builder = false;
+        }
 
         if ($force_content_update && $manual_content_override && !$page_builder) {
             delete_post_meta($existing_post->ID, '_autoseo_manual_content_override');

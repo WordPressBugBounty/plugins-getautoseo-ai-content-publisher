@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.94
+ * Version: 1.3.95
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.94');
+define('AUTOSEO_VERSION', '1.3.95');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -162,6 +162,9 @@ class AutoSEO_Plugin {
 
         // Add anchor IDs to headings for TOC linking (runs early to ensure IDs exist)
         add_filter('the_content', array($this, 'add_heading_anchor_ids'), 5);
+
+        // Unwrap legacy heading anchor links that break layout in some themes
+        add_filter('the_content', array($this, 'normalize_autoseo_heading_anchors'), 6);
 
         // Keep YouTube embeds responsive even when inline styles were stripped before sync.
         add_filter('the_content', array($this, 'normalize_youtube_embed_markup'), 9);
@@ -3994,6 +3997,37 @@ class AutoSEO_Plugin {
             },
             $content
         );
+    }
+
+    /**
+     * Unwrap legacy AutoSEO heading anchor links at render time.
+     *
+     * Older sync payloads wrapped H2 text in named anchors for CMS compatibility.
+     * Some themes (e.g. Infinite WP) render that markup as vertical text.
+     */
+    public function normalize_autoseo_heading_anchors($content) {
+        if (!is_singular('post') || !in_the_loop() || !is_main_query()) {
+            return $content;
+        }
+
+        $post = get_post();
+        if (!$post || !get_post_meta($post->ID, '_autoseo_article_id', true)) {
+            return $content;
+        }
+
+        $content = preg_replace(
+            '/<a\b[^>]*\bclass=(["\'])autoseo-heading-anchor\1[^>]*>(.*?)<\/a>/is',
+            '$2',
+            $content
+        );
+
+        $content = preg_replace(
+            '/<a\b[^>]*\bname=(["\'])[^"\']*\1[^>]*>\s*<\/a>/is',
+            '',
+            $content
+        );
+
+        return $content;
     }
 
     /**

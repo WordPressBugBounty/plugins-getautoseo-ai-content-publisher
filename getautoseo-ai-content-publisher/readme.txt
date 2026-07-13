@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.94
+Stable tag: 1.3.95
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.95 =
+* FIXED: Key Takeaways headings could render as vertical text in some WordPress themes after recent article formatting changes. Legacy anchor-wrapped headings are now normalized at render time, and frontend CSS ensures horizontal layout for Key Takeaways and Table of Contents blocks.
 
 = 1.3.93 =
 * FIXED: Explicit force republish can now refresh stale AutoSEO-managed post bodies that were blocked by page-builder metadata, so updated author boxes and social links can be pushed to older posts.

@@ -513,9 +513,12 @@ class AutoSEO_Publisher {
         // Clean it immediately so the post renders via standard post_content.
         $this->clear_page_builder_meta($post_id);
 
-        // Assign WPML language if the plugin is active and article has a language
+        // Assign the post's translation language (WPML or Polylang) and, when the
+        // source article is known, link it to that translation group so
+        // multilingual URLs (/de/, /fr/, …) and hreflang/language switchers work.
         if (!empty($article->language)) {
-            $this->set_wpml_language($post_id, $article->language);
+            $source_article_id = isset($article->source_article_id) ? $article->source_article_id : null;
+            $this->set_post_language($post_id, $article->language, $source_article_id);
         }
 
         // Set featured image if we have one
@@ -1234,9 +1237,12 @@ class AutoSEO_Publisher {
             $existing_post->ID
         ));
 
-        // Assign WPML language if the plugin is active and article has a language
+        // Assign the post's translation language (WPML or Polylang) and, when the
+        // source article is known, link it to that translation group so
+        // multilingual URLs (/de/, /fr/, …) and hreflang/language switchers work.
         if (!empty($article->language)) {
-            $this->set_wpml_language($existing_post->ID, $article->language);
+            $source_article_id = isset($article->source_article_id) ? $article->source_article_id : null;
+            $this->set_post_language($existing_post->ID, $article->language, $source_article_id);
         }
 
         // Handle hero/featured image - ONLY download if URL has ACTUALLY changed
@@ -2366,6 +2372,172 @@ class AutoSEO_Publisher {
             $post_id,
             $current_lang ?: 'default'
         ));
+    }
+
+    /**
+     * Assign a post's translation language, dispatching to whichever
+     * multilingual plugin is active (WPML or Polylang).
+     *
+     * @param int         $post_id           WordPress post ID.
+     * @param string      $language_code     Target language code (e.g. "de").
+     * @param string|null $source_article_id AutoSEO ID of the source-language
+     *                                        article this post was translated from.
+     */
+    private function set_post_language($post_id, $language_code, $source_article_id = null) {
+        // WPML takes precedence when both are somehow installed.
+        if (defined('ICL_SITEPRESS_VERSION') || function_exists('icl_object_id')) {
+            $this->set_wpml_language($post_id, $language_code);
+            return;
+        }
+
+        if (function_exists('pll_set_post_language')) {
+            $this->set_polylang_language($post_id, $language_code, $source_article_id);
+        }
+    }
+
+    /**
+     * Assign the correct Polylang language to a post and, when the source
+     * article is known, link it to that translation group.
+     *
+     * Polylang stores language as a term relationship and generates the
+     * language directory (/de/, /fr/, …) from it. Without this, translated
+     * posts fall back to the default language and publish to the primary
+     * (untranslated) URL space — e.g. a German post landing on the English blog.
+     *
+     * Falls back gracefully: if Polylang is not installed or the language is
+     * not configured, the post is left in the default language.
+     */
+    private function set_polylang_language($post_id, $language_code, $source_article_id = null) {
+        if (!function_exists('pll_set_post_language')) {
+            return;
+        }
+
+        $language_code = strtolower(substr($language_code, 0, 2));
+
+        // Verify this language is configured in Polylang.
+        $active_languages = function_exists('pll_languages_list')
+            ? pll_languages_list(array('fields' => 'slug'))
+            : array();
+        if (!is_array($active_languages) || !in_array($language_code, $active_languages, true)) {
+            $this->log_debug(sprintf(
+                'Polylang: language "%s" is not active for post %d — skipping',
+                $language_code,
+                $post_id
+            ));
+            return;
+        }
+
+        $current_lang = function_exists('pll_get_post_language')
+            ? pll_get_post_language($post_id, 'slug')
+            : '';
+
+        if ($current_lang !== $language_code) {
+            pll_set_post_language($post_id, $language_code);
+            $this->log_debug(sprintf(
+                'Polylang: assigned language "%s" to post %d (was: %s)',
+                $language_code,
+                $post_id,
+                $current_lang ?: 'default'
+            ));
+        }
+
+        // Link this translation to its source-language post so Polylang serves
+        // proper hreflang tags and the language switcher points between them.
+        if (!empty($source_article_id)) {
+            $this->link_polylang_translation($post_id, $language_code, $source_article_id);
+        }
+    }
+
+    /**
+     * Connect a translated post to its source-language post within Polylang's
+     * translation group, so the two are recognised as translations of each other.
+     *
+     * @param int    $translated_post_id Post ID of the translated article.
+     * @param string $translated_lang    Language slug of the translated post.
+     * @param string $source_article_id  AutoSEO ID of the source-language article.
+     */
+    private function link_polylang_translation($translated_post_id, $translated_lang, $source_article_id) {
+        if (!function_exists('pll_save_post_translations') || !function_exists('pll_get_post_language')) {
+            return;
+        }
+
+        $source_post = $this->find_post_by_autoseo_id($source_article_id);
+        if (!$source_post) {
+            $this->log_debug(sprintf(
+                'Polylang: source article %s for post %d not on this site yet — skipping translation link',
+                $source_article_id,
+                $translated_post_id
+            ));
+            return;
+        }
+
+        // Ensure the source post has a language before linking. If it never got
+        // one (e.g. published before this feature existed), assign the site default.
+        $source_lang = pll_get_post_language($source_post->ID, 'slug');
+        if (empty($source_lang)) {
+            $source_lang = function_exists('pll_default_language') ? pll_default_language('slug') : '';
+            if (!empty($source_lang)) {
+                pll_set_post_language($source_post->ID, $source_lang);
+            }
+        }
+
+        // Two posts sharing the same language can't be linked as translations.
+        if (empty($source_lang) || $source_lang === $translated_lang) {
+            return;
+        }
+
+        // Merge into the source post's existing translation group. Polylang's
+        // pll_save_post_translations() REPLACES the whole group, so on a site
+        // with multiple target languages (e.g. EN→DE and EN→FR) we must carry
+        // over the already-linked translations or linking the second language
+        // would silently unlink the first.
+        $translations = function_exists('pll_get_post_translations')
+            ? pll_get_post_translations($source_post->ID)
+            : array();
+        if (!is_array($translations)) {
+            $translations = array();
+        }
+        $translations[$source_lang]     = $source_post->ID;
+        $translations[$translated_lang] = $translated_post_id;
+
+        pll_save_post_translations($translations);
+
+        $this->log_debug(sprintf(
+            'Polylang: linked post %d (%s) as translation of post %d (%s); group now [%s]',
+            $translated_post_id,
+            $translated_lang,
+            $source_post->ID,
+            $source_lang,
+            implode(', ', array_keys($translations))
+        ));
+    }
+
+    /**
+     * Find a WordPress post by the AutoSEO article ID stored in its
+     * _autoseo_article_id meta.
+     *
+     * @param string $autoseo_article_id
+     * @return WP_Post|null
+     */
+    private function find_post_by_autoseo_id($autoseo_article_id) {
+        $query = new WP_Query(array(
+            'post_type'              => 'post',
+            'post_status'            => array('publish', 'draft', 'pending', 'private', 'future'),
+            'posts_per_page'         => 1,
+            'no_found_rows'          => true,
+            'ignore_sticky_posts'    => true,
+            'update_post_term_cache' => false,
+            'update_post_meta_cache' => false,
+            'meta_query'             => array(
+                array(
+                    'key'   => '_autoseo_article_id',
+                    'value' => (string) $autoseo_article_id,
+                ),
+            ),
+        ));
+        $post = !empty($query->posts) ? $query->posts[0] : null;
+        wp_reset_postdata();
+        return $post;
     }
 }
 

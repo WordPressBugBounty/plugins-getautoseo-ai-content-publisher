@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.95
+ * Version: 1.3.96
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.95');
+define('AUTOSEO_VERSION', '1.3.96');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -634,6 +634,7 @@ class AutoSEO_Plugin {
         $this->add_hero_image_alt_column();
         $this->add_previous_article_ids_column();
         $this->add_language_column();
+        $this->add_source_article_id_column();
         $this->add_settings_created_at_column();
         
         // Set transient to prevent running again for 1 hour
@@ -660,6 +661,7 @@ class AutoSEO_Plugin {
         $this->add_hero_image_alt_column();
         $this->add_previous_article_ids_column();
         $this->add_language_column();
+        $this->add_source_article_id_column();
         $this->add_recreate_count_column();
         $this->add_settings_created_at_column();
         $this->maybe_convert_tables_to_utf8mb4();
@@ -1380,6 +1382,9 @@ class AutoSEO_Plugin {
         // Add language column for WPML integration
         $this->add_language_column();
 
+        // Add source_article_id column for multilingual translation linking
+        $this->add_source_article_id_column();
+
         // Add recreate_count column for auto-recovery of deleted posts
         $this->add_recreate_count_column();
 
@@ -1747,6 +1752,34 @@ class AutoSEO_Plugin {
             if ($result !== false) {
                 // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
                 error_log('[AutoSEO] Added language column for WPML integration');
+            }
+        }
+    }
+
+    /**
+     * Add source_article_id column so translated posts can be linked back to
+     * their source-language article. Used to connect translations within WPML
+     * and Polylang translation groups (for correct /de/ URLs and hreflang).
+     */
+    private function add_source_article_id_column() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'autoseo_articles';
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $table_name is escaped with esc_sql()
+        $column_exists = $wpdb->get_results($wpdb->prepare(
+            "SHOW COLUMNS FROM " . esc_sql($table_name) . " LIKE %s",
+            'source_article_id'
+        ));
+
+        if (empty($column_exists)) {
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $table_name is escaped with esc_sql()
+            $result = $wpdb->query(
+                "ALTER TABLE " . esc_sql($table_name) . " ADD COLUMN source_article_id VARCHAR(100) DEFAULT NULL"
+            );
+            if ($result !== false) {
+                // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+                error_log('[AutoSEO] Added source_article_id column for multilingual translation linking');
             }
         }
     }

@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.96
+ * Version: 1.3.97
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.96');
+define('AUTOSEO_VERSION', '1.3.97');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -612,33 +612,58 @@ class AutoSEO_Plugin {
 
     /**
      * Ensure database schema is up to date (runs on every init for cron compatibility)
-     * Uses transient to avoid running migrations on every request
+     *
+     * Throttling uses a plain (autoloaded) option storing the last-check timestamp
+     * rather than a transient. A transient's timeout row is auto-deleted by
+     * get_transient() the moment it expires, so under concurrent traffic (regular
+     * requests + cron) many init requests would race on the SAME
+     * `DELETE FROM {prefix}_options WHERE option_name = '_transient_autoseo_schema_check_...'`
+     * query and hit repeated InnoDB deadlocks. Reading an autoloaded option is served
+     * from the alloptions cache and never issues a DELETE, which removes the race.
      */
     public function ensure_db_schema() {
-        // Only run once per hour (transient-based throttling)
-        $transient_key = 'autoseo_schema_check_' . AUTOSEO_VERSION;
-        if (get_transient($transient_key)) {
+        // Guard against running more than once within a single request.
+        static $checked_this_request = false;
+        if ($checked_this_request) {
             return;
         }
-        
-        // Run all idempotent migrations (they check if column exists first)
-        $this->add_featured_image_column();
-        $this->add_hero_image_column();
-        $this->add_infographic_column();
-        $this->add_infographic_image_column();
-        $this->add_meta_description_columns();
-        $this->add_wordpress_tags_column();
-        $this->add_content_markdown_column();
-        $this->add_intended_published_at_column();
-        $this->add_faq_schema_column();
-        $this->add_hero_image_alt_column();
-        $this->add_previous_article_ids_column();
-        $this->add_language_column();
-        $this->add_source_article_id_column();
-        $this->add_settings_created_at_column();
-        
-        // Set transient to prevent running again for 1 hour
-        set_transient($transient_key, '1', HOUR_IN_SECONDS);
+        $checked_this_request = true;
+
+        // Only run once per hour (timestamp-based throttling via a plain option).
+        $option_key = 'autoseo_schema_check_' . AUTOSEO_VERSION;
+        $last_check  = (int) get_option($option_key, 0);
+        if ($last_check > 0 && (time() - $last_check) < HOUR_IN_SECONDS) {
+            return;
+        }
+
+        // Record the check timestamp up-front (autoload=no) so concurrent requests
+        // skip the migration block immediately, shrinking the race window. update_option
+        // performs an UPDATE on a single row rather than the DELETE storm a transient causes.
+        update_option($option_key, time(), false);
+
+        // Run all idempotent migrations (they check if column exists first).
+        // Wrapped defensively so a transient DB hiccup can never turn into an
+        // every-request error loop.
+        try {
+            $this->add_featured_image_column();
+            $this->add_hero_image_column();
+            $this->add_infographic_column();
+            $this->add_infographic_image_column();
+            $this->add_meta_description_columns();
+            $this->add_wordpress_tags_column();
+            $this->add_content_markdown_column();
+            $this->add_intended_published_at_column();
+            $this->add_faq_schema_column();
+            $this->add_hero_image_alt_column();
+            $this->add_previous_article_ids_column();
+            $this->add_language_column();
+            $this->add_source_article_id_column();
+            $this->add_slug_column();
+            $this->add_settings_created_at_column();
+        } catch (\Throwable $e) {
+            // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+            error_log('[AutoSEO] ensure_db_schema migration error: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -662,6 +687,7 @@ class AutoSEO_Plugin {
         $this->add_previous_article_ids_column();
         $this->add_language_column();
         $this->add_source_article_id_column();
+        $this->add_slug_column();
         $this->add_recreate_count_column();
         $this->add_settings_created_at_column();
         $this->maybe_convert_tables_to_utf8mb4();
@@ -1330,6 +1356,7 @@ class AutoSEO_Plugin {
             autoseo_id varchar(100) NOT NULL,
             post_id bigint(20) unsigned DEFAULT NULL,
             title text NOT NULL,
+            slug varchar(200) DEFAULT NULL,
             content longtext NOT NULL,
             excerpt text,
             keywords text,
@@ -1384,6 +1411,9 @@ class AutoSEO_Plugin {
 
         // Add source_article_id column for multilingual translation linking
         $this->add_source_article_id_column();
+
+        // Add slug column so AutoSEO can supply an English permalink for non-Latin titles
+        $this->add_slug_column();
 
         // Add recreate_count column for auto-recovery of deleted posts
         $this->add_recreate_count_column();
@@ -1780,6 +1810,35 @@ class AutoSEO_Plugin {
             if ($result !== false) {
                 // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
                 error_log('[AutoSEO] Added source_article_id column for multilingual translation linking');
+            }
+        }
+    }
+
+    /**
+     * Add slug column so AutoSEO can supply an English permalink for the post.
+     * For non-Latin titles (e.g. Traditional Chinese) WordPress would otherwise
+     * build an unreadable URL-encoded slug from the title; AutoSEO now sends a
+     * clean English slug which the publisher uses as the post_name on new posts.
+     */
+    private function add_slug_column() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'autoseo_articles';
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $table_name is escaped with esc_sql()
+        $column_exists = $wpdb->get_results($wpdb->prepare(
+            "SHOW COLUMNS FROM " . esc_sql($table_name) . " LIKE %s",
+            'slug'
+        ));
+
+        if (empty($column_exists)) {
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $table_name is escaped with esc_sql()
+            $result = $wpdb->query(
+                "ALTER TABLE " . esc_sql($table_name) . " ADD COLUMN slug VARCHAR(200) DEFAULT NULL AFTER title"
+            );
+            if ($result !== false) {
+                // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+                error_log('[AutoSEO] Added slug column for English permalinks');
             }
         }
     }

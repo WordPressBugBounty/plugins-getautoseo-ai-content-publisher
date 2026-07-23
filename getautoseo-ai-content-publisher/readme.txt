@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.96
+Stable tag: 1.3.97
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,10 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.97 =
+* FIXED: Eliminated recurring MySQL "Deadlock found when trying to get lock" errors that could fill the site error log on high-traffic sites. The plugin's hourly schema check no longer relies on an expiring transient (which auto-deleted the same option rows on every request and let concurrent requests collide); it now uses a lightweight cached timestamp instead. No impact on publishing or content.
+* FIXED: Polylang exposes a WPML-compatible `icl_object_id()` function, which previously caused AutoSEO to use the WPML integration instead of Polylang’s native API. Translated posts now receive their configured Polylang language and publish under the appropriate language URL, such as `/de/`.
 
 = 1.3.96 =
 * ADDED: Polylang support. Translated articles are now assigned the correct language and linked to their source-language post, so they publish under the right language directory (e.g. /de/) with proper hreflang and language-switcher links instead of landing in the primary/default language section. WPML sites continue to work as before.

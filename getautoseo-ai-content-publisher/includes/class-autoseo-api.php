@@ -304,6 +304,11 @@ class AutoSEO_API {
             "SHOW COLUMNS FROM " . esc_sql($table_name) . " LIKE %s",
             'source_article_id'
         )));
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $has_slug_col = !empty($wpdb->get_results($wpdb->prepare(
+            "SHOW COLUMNS FROM " . esc_sql($table_name) . " LIKE %s",
+            'slug'
+        )));
 
         AutoSEO_Publisher::start_batch();
 
@@ -446,6 +451,9 @@ class AutoSEO_API {
                             if ($has_source_article_id_col) {
                                 $linked_data['source_article_id'] = $article['source_article_id'] ?? null;
                             }
+                            if ($has_slug_col) {
+                                $linked_data['slug'] = $this->sanitize_for_db($article['slug'] ?? null);
+                            }
                             $linked_formats = array_fill(0, count($linked_data), '%s');
                             $linked_formats[1] = '%d'; // post_id
                             $wpdb->insert($table_name, $linked_data, $linked_formats);
@@ -534,6 +542,9 @@ class AutoSEO_API {
                 }
                 if ($has_source_article_id_col) {
                     $article_data['source_article_id'] = $article['source_article_id'] ?? null;
+                }
+                if ($has_slug_col) {
+                    $article_data['slug'] = $this->sanitize_for_db($article['slug'] ?? null);
                 }
 
                 if ($existing) {

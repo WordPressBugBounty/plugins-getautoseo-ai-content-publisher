@@ -423,10 +423,15 @@ class AutoSEO_Publisher {
 
         // Prepare post data
         // Explicitly set post_name (slug) to prevent WordPress from sometimes failing to auto-generate it
-        // This ensures proper SEO-friendly URLs instead of fallback ?p=ID format
+        // This ensures proper SEO-friendly URLs instead of fallback ?p=ID format.
+        // Prefer the slug supplied by AutoSEO (an English slug for non-Latin titles like
+        // Traditional Chinese) so the permalink is readable instead of a URL-encoded title.
+        $post_slug = (!empty($article->slug))
+            ? sanitize_title($article->slug)
+            : sanitize_title($article->title);
         $post_data = array(
             'post_title' => $article->title,
-            'post_name' => sanitize_title($article->title),
+            'post_name' => $post_slug,
             'post_content' => $this->normalize_youtube_embed_markup($article->content),
             'post_excerpt' => $article->excerpt,
             'post_status' => 'publish',
@@ -2330,7 +2335,10 @@ class AutoSEO_Publisher {
      * not configured in WPML, the post is left in the site default language.
      */
     private function set_wpml_language($post_id, $language_code) {
-        if (!function_exists('icl_object_id') && !defined('ICL_SITEPRESS_VERSION')) {
+        // Polylang exposes icl_object_id() for WPML compatibility, so that
+        // function does not prove that WPML itself is active. The SitePress
+        // version constant is unique to WPML.
+        if (!defined('ICL_SITEPRESS_VERSION')) {
             return;
         }
 
@@ -2384,8 +2392,10 @@ class AutoSEO_Publisher {
      *                                        article this post was translated from.
      */
     private function set_post_language($post_id, $language_code, $source_article_id = null) {
-        // WPML takes precedence when both are somehow installed.
-        if (defined('ICL_SITEPRESS_VERSION') || function_exists('icl_object_id')) {
+        // Polylang exposes icl_object_id() for WPML compatibility. Detect
+        // WPML only by its unique SitePress constant so Polylang reaches its
+        // native API below.
+        if (defined('ICL_SITEPRESS_VERSION')) {
             $this->set_wpml_language($post_id, $language_code);
             return;
         }

@@ -63,53 +63,37 @@
     border: 0;
 }
 
-/* Key Takeaways and Table of Contents — synced article structure */
-.key-takeaways,
-.table-of-contents {
+/*
+ * Key Takeaways and Table of Contents — structural fixes only.
+ * Visual styling belongs to the active theme so dark and custom designs are
+ * never replaced by AutoSEO backgrounds, borders, padding, or spacing.
+ */
+.autoseo .key-takeaways,
+.autoseo .table-of-contents {
     writing-mode: horizontal-tb;
     display: block;
     width: 100%;
     max-width: 100%;
-    margin: 2rem 0;
-    padding: 1.5rem;
-    border-radius: 8px;
-    overflow: hidden;
     clear: both;
 }
 
-.key-takeaways {
-    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-    border: 1px solid #bae6fd;
-    border-left: 4px solid #0ea5e9;
-}
-
-.table-of-contents {
-    background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
-    border: 1px solid #e9d5ff;
-    border-left: 4px solid #a855f7;
-}
-
-.key-takeaways h2,
-.key-takeaways h3,
-.table-of-contents h2,
-.table-of-contents h3 {
+.autoseo .key-takeaways h2,
+.autoseo .key-takeaways h3,
+.autoseo .table-of-contents h2,
+.autoseo .table-of-contents h3 {
     writing-mode: horizontal-tb;
     display: block;
     width: 100%;
-    margin-top: 0;
-    margin-bottom: 1rem;
 }
 
-.key-takeaways ul,
-.table-of-contents ul {
+.autoseo .key-takeaways ul,
+.autoseo .table-of-contents ul {
     writing-mode: horizontal-tb;
     display: block;
-    margin-bottom: 0;
-    padding-left: 1.5rem;
 }
 
-.key-takeaways li,
-.table-of-contents li {
+.autoseo .key-takeaways li,
+.autoseo .table-of-contents li {
     writing-mode: horizontal-tb;
     display: list-item;
 }

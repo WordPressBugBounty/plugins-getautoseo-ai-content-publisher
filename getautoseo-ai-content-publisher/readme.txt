@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.97
+Stable tag: 1.3.98
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,10 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.98 =
+* FIXED: AutoSEO no longer forces light backgrounds, borders, padding, or spacing onto Key Takeaways and Table of Contents blocks, allowing each WordPress theme to control their appearance.
+* FIXED: Manually edited and page-builder articles no longer receive a second runtime infographic when the user has cropped, replaced, or positioned the original image.
 
 = 1.3.97 =
 * FIXED: Eliminated recurring MySQL "Deadlock found when trying to get lock" errors that could fill the site error log on high-traffic sites. The plugin's hourly schema check no longer relies on an expiring transient (which auto-deleted the same option rows on every request and let concurrent requests collide); it now uses a lightweight cached timestamp instead. No impact on publishing or content.

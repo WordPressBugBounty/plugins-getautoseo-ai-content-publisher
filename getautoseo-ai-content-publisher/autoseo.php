@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.97
+ * Version: 1.3.98
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.97');
+define('AUTOSEO_VERSION', '1.3.98');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -4152,18 +4152,30 @@ class AutoSEO_Plugin {
             return $content;
         }
 
+        global $post;
+        if (!$post || empty($post->ID) || !$this->is_autoseo_article($post->ID)) {
+            return $content;
+        }
+
+        // A page builder or manual WordPress edit owns the rendered body. Injecting
+        // the original AutoSEO infographic at display time can duplicate a cropped
+        // or replaced image that the user intentionally added to their layout.
+        if (
+            get_post_meta($post->ID, '_autoseo_manual_content_override', true)
+            || AutoSEO_Publisher::has_page_builder_content($post->ID)
+        ) {
+            return $content;
+        }
+
         // Content-based guard: check the filtered $content for the container class.
         // Existing posts can have a baked infographic image from an older plugin
         // version, so normalize it before returning.
         if (strpos($content, 'autoseo-infographic-container') !== false) {
-            global $post;
-            return $this->normalize_infographic_image_markup($content, $post->ID ?? 0);
+            return $this->normalize_infographic_image_markup($content, $post->ID);
         }
 
         // Prevent multiple injections on the same page load
         static $already_injected = array();
-
-        global $post;
 
         if (isset($already_injected[$post->ID])) {
             return $content;
@@ -4180,11 +4192,6 @@ class AutoSEO_Plugin {
             return $content;
         }
         
-        // Check if this is an AutoSEO article
-        if (!$this->is_autoseo_article($post->ID)) {
-            return $content;
-        }
-
         // Get the infographic image ID
         $infographic_image_id = get_post_meta($post->ID, '_autoseo_infographic_image_id', true);
         

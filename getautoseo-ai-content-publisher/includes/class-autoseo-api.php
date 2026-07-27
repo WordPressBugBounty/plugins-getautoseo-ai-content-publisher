@@ -749,6 +749,25 @@ class AutoSEO_API {
                             }
                         }
 
+                        // FAQ schema is stored separately from post content. Older posts
+                        // can therefore look up-to-date while their JSON-LD meta was never
+                        // saved. Refresh those posts so the publisher restores the meta.
+                        $missing_faq_schema = false;
+                        if (!empty($article['faq_schema'])) {
+                            $stored_faq_schema = get_post_meta($wp_post->ID, '_autoseo_faq_schema', true);
+                            $stored_faqs = is_string($stored_faq_schema)
+                                ? json_decode($stored_faq_schema, true)
+                                : $stored_faq_schema;
+
+                            if (empty($stored_faqs) || !is_array($stored_faqs)) {
+                                $missing_faq_schema = true;
+                                $this->log_debug(sprintf(
+                                    'Article "%s" is missing FAQ schema meta - refreshing structured data',
+                                    $article['title']
+                                ));
+                            }
+                        }
+
                         $force_content_update = !empty($article['force_content_update']);
 
                         // Older syncs can leave markdown/plain text in post_content while the
@@ -768,7 +787,13 @@ class AutoSEO_API {
                             ));
                         }
 
-                        if ($api_updated_at > 0 && $synced_at_utc > 0 && $api_updated_at <= $synced_at_utc && !$missing_assets && !$force_content_update) {
+                        if ($api_updated_at > 0
+                            && $synced_at_utc > 0
+                            && $api_updated_at <= $synced_at_utc
+                            && !$missing_assets
+                            && !$missing_faq_schema
+                            && !$force_content_update
+                        ) {
                             if ($needs_url_confirmation) {
                                 $publisher = new AutoSEO_Publisher();
                                 $published_url = $publisher->get_post_permalink($wp_post->ID);

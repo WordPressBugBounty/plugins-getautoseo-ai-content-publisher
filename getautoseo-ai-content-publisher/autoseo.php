@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.99
+ * Version: 1.3.100
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.99');
+define('AUTOSEO_VERSION', '1.3.100');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -3961,19 +3961,9 @@ class AutoSEO_Plugin {
             return $content;
         }
 
-        // Case A: H2 + <ul>...</ul> + stray </div> — wrap and consume the stray closer
-        $replaced = preg_replace(
-            '/(<h2[^>]*>[^<]*<\/h2>\s*<ul>)(.*?)(<\/ul>)\s*<\/div>/is',
-            '<div class="key-takeaways">$1$2$3</div>',
-            $content,
-            1,
-            $count
-        );
-        if ($count > 0 && $replaced !== null) {
-            return $replaced;
-        }
-
-        // Case B: H2 + <ul>...</ul> with no wrapper at all — wrap using known headings
+        // Only repair sections with a recognised Key Takeaways heading. A broad
+        // H2 + list match also catches the table of contents; wrapping it consumes
+        // the TOC's closing div and corrupts the page layout.
         $known_headings = array(
             'Key Takeaways', 'Puntos Clave', 'Points Cl(?:é|e)s', 'Wichtigste Erkenntnisse',
             'Punti Chiave', 'Principais Conclus(?:õ|o)es', 'Belangrijkste Punten',
@@ -3988,6 +3978,20 @@ class AutoSEO_Plugin {
         );
         $headings_pattern = implode('|', $known_headings);
 
+        // Case A: recognised H2 + <ul>...</ul> + stray </div> — wrap and consume
+        // the closer only when it belongs to a Key Takeaways section.
+        $replaced = preg_replace(
+            '/(<h2[^>]*>\s*(?:' . $headings_pattern . ')\s*<\/h2>\s*<ul>)(.*?)(<\/ul>)\s*<\/div>/isu',
+            '<div class="key-takeaways">$1$2$3</div>',
+            $content,
+            1,
+            $count
+        );
+        if ($count > 0 && $replaced !== null) {
+            return $replaced;
+        }
+
+        // Case B: recognised H2 + <ul>...</ul> with no wrapper at all.
         $replaced = preg_replace(
             '/(<h2[^>]*>\s*(?:' . $headings_pattern . ')\s*<\/h2>\s*<ul>)(.*?)(<\/ul>)/isu',
             '<div class="key-takeaways">$1$2$3</div>',

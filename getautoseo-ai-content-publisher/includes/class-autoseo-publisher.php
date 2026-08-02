@@ -1185,6 +1185,18 @@ class AutoSEO_Publisher {
             update_post_meta($existing_post->ID, '_autoseo_article_id', $article->autoseo_id);
             update_post_meta($existing_post->ID, '_autoseo_managed', '1');
 
+            // A user explicitly applying a changed author box must also work on
+            // Divi (and other builder) posts. Merge only the server-generated
+            // author-box fragment directly into the stored builder content, so
+            // the rest of the customer's layout remains untouched.
+            if ($force_content_update && $page_builder && !$manual_content_override) {
+                $this->sync_author_box_into_page_builder_content(
+                    $existing_post->ID,
+                    $existing_post->post_content,
+                    $article->content
+                );
+            }
+
             $this->log_debug(sprintf(
                 'Post %d has %s edits — preserving user content, updating title + metadata only',
                 $existing_post->ID,
@@ -1680,6 +1692,112 @@ class AutoSEO_Publisher {
         }
 
         return false;
+    }
+
+    /**
+     * Update only the AutoSEO author box within a page-builder post.
+     *
+     * Page builders own the surrounding markup, so replacing the entire body
+     * would discard customer layout changes. The incoming AutoSEO payload is
+     * the source of truth for this one generated fragment.
+     */
+    private function sync_author_box_into_page_builder_content($post_id, $existing_content, $incoming_content) {
+        global $wpdb;
+
+        $new_author_box = $this->extract_author_box_html($incoming_content);
+        $updated_content = $this->replace_author_box_html($existing_content, $new_author_box);
+
+        if ($updated_content === $existing_content) {
+            return;
+        }
+
+        $wpdb->update(
+            $wpdb->posts,
+            array('post_content' => $updated_content),
+            array('ID' => $post_id),
+            array('%s'),
+            array('%d')
+        );
+        clean_post_cache($post_id);
+
+        $this->log_debug(sprintf(
+            'Updated author box in page-builder content for post %d (%s)',
+            $post_id,
+            $new_author_box === '' ? 'removed' : 'applied'
+        ));
+    }
+
+    /**
+     * Extract the complete author-box div from trusted server-generated HTML.
+     */
+    private function extract_author_box_html($html) {
+        if (!is_string($html) || strpos($html, 'author-box') === false) {
+            return '';
+        }
+
+        $previous_errors = libxml_use_internal_errors(true);
+        $document = new DOMDocument('1.0', 'UTF-8');
+        $loaded = $document->loadHTML(
+            '<?xml encoding="UTF-8">' . $html,
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
+        );
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous_errors);
+
+        if (!$loaded) {
+            return '';
+        }
+
+        $xpath = new DOMXPath($document);
+        $nodes = $xpath->query('//*[contains(concat(" ", normalize-space(@class), " "), " author-box ")]');
+        $author_box = $nodes ? $nodes->item(0) : null;
+
+        return $author_box ? trim($document->saveHTML($author_box)) : '';
+    }
+
+    /**
+     * Replace an existing author-box div, or append the incoming one.
+     */
+    private function replace_author_box_html($content, $new_author_box) {
+        if (!is_string($content)) {
+            $content = '';
+        }
+
+        $pattern = '/<div\b(?=[^>]*\bclass\s*=\s*(["\'])[^"\']*\bauthor-box\b[^"\']*\1)[^>]*>/i';
+        if (!preg_match($pattern, $content, $match, PREG_OFFSET_CAPTURE)) {
+            return $new_author_box === '' ? $content : rtrim($content) . "\n" . $new_author_box;
+        }
+
+        $start = $match[0][1];
+        $end = $this->find_matching_div_end($content, $start);
+        if ($end === null) {
+            $this->log_debug('Could not replace malformed author-box HTML; preserving existing content');
+            return $content;
+        }
+
+        return substr($content, 0, $start) . $new_author_box . substr($content, $end);
+    }
+
+    /**
+     * Return the offset immediately after the closing div paired with $start.
+     */
+    private function find_matching_div_end($content, $start) {
+        $fragment = substr($content, $start);
+        if (!preg_match_all('/<\/?div\b[^>]*>/i', $fragment, $tags, PREG_OFFSET_CAPTURE)) {
+            return null;
+        }
+
+        $depth = 0;
+        foreach ($tags[0] as $tag) {
+            $is_closing = strpos($tag[0], '</') === 0;
+            $depth += $is_closing ? -1 : 1;
+
+            if ($depth === 0) {
+                return $start + $tag[1] + strlen($tag[0]);
+            }
+        }
+
+        return null;
     }
 
     /**

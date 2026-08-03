@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.100
+Stable tag: 1.3.101
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.101 =
+* IMPROVED: Increased the authenticated AutoSEO sync request limit to handle short publishing bursts without interrupting syncs.
 
 = 1.3.99 =
 * FIXED: Published AutoSEO articles missing FAQ structured-data metadata are now refreshed during sync, restoring their FAQPage JSON-LD without changing the article body.

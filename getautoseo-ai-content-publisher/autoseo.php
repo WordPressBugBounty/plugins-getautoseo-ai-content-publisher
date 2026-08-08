@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.101
+ * Version: 1.3.102
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.101');
+define('AUTOSEO_VERSION', '1.3.102');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -659,6 +659,7 @@ class AutoSEO_Plugin {
             $this->add_language_column();
             $this->add_source_article_id_column();
             $this->add_slug_column();
+            $this->create_settings_table_if_missing();
             $this->add_settings_created_at_column();
         } catch (\Throwable $e) {
             // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
@@ -689,12 +690,20 @@ class AutoSEO_Plugin {
         $this->add_source_article_id_column();
         $this->add_slug_column();
         $this->add_recreate_count_column();
+        $this->create_settings_table_if_missing();
         $this->add_settings_created_at_column();
         $this->maybe_convert_tables_to_utf8mb4();
         
         // One-time duplicate cleanup (added in 1.3.43)
         if (version_compare($installed_version, '1.3.43', '<')) {
             $this->cleanup_duplicate_posts();
+        }
+
+        // Release any sync lock stranded by a crashed or timed-out sync on the
+        // previous version. Without this a site that got stuck stays stuck, because
+        // every later sync bails out on a lock whose owner will never return.
+        if (version_compare($installed_version, '1.3.102', '<')) {
+            $this->clear_stranded_sync_locks();
         }
 
         // If installed version is less than current, log the upgrade
@@ -1872,6 +1881,66 @@ class AutoSEO_Plugin {
     }
 
     /**
+     * Delete sync lock rows left behind by a sync that never finished.
+     */
+    private function clear_stranded_sync_locks() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'autoseo_settings';
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name));
+        if ($exists !== $table_name) {
+            return;
+        }
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $deleted = $wpdb->query(
+            "DELETE FROM " . esc_sql($table_name) . " WHERE setting_key = 'sync_lock'"
+        );
+
+        if ($deleted) {
+            // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+            error_log('[AutoSEO] Cleared ' . (int) $deleted . ' stranded sync lock(s) on upgrade');
+        }
+    }
+
+    /**
+     * Recreate the autoseo_settings table if it is missing.
+     *
+     * Only plugin activation created this table, so a site that lost it (failed
+     * activation, a migration tool, a partial restore) had no way to get it back
+     * and the sync lock could never be taken.
+     */
+    private function create_settings_table_if_missing() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'autoseo_settings';
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name));
+        if ($exists === $table_name) {
+            return;
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        $charset_collate = $wpdb->get_charset_collate();
+        dbDelta("CREATE TABLE $table_name (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            setting_key varchar(100) NOT NULL,
+            setting_value longtext,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY setting_key (setting_key)
+        ) $charset_collate;");
+
+        // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+        error_log('[AutoSEO] Recreated missing settings table');
+    }
+
+    /**
      * Ensure the autoseo_settings table has a created_at column.
      * Older installations may have been created without it, causing the sync lock
      * cleanup query to fail silently and permanently block syncs.
@@ -2679,6 +2748,17 @@ class AutoSEO_Plugin {
             );
         }
 
+        // Without this the article is looked up in a sync table the skipped sync never
+        // populated, and the real cause is reported as a misleading "Article not found".
+        if (!empty($sync_result['skipped'])) {
+            $this->log_debug('Force republish skipped - another sync is already in progress');
+            return new WP_Error(
+                'sync_in_progress',
+                $sync_result['message'],
+                array('status' => 409)
+            );
+        }
+
         // Get the article from sync table
         // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table_name is safely constructed from $wpdb->prefix
         $article = $wpdb->get_row($wpdb->prepare(
@@ -2838,6 +2918,18 @@ class AutoSEO_Plugin {
                     'sync_failed',
                     $error_message,
                     array('status' => 500)
+                );
+            }
+
+            // Answering a skipped sync with a 200 made AutoSEO record "WordPress
+            // accepted the sync request but did not publish the article". A 409 tells
+            // the server this is a transient conflict worth retrying.
+            if (!empty($sync_result['skipped'])) {
+                $this->log_debug('Trigger sync skipped - another sync is already in progress');
+                return new WP_Error(
+                    'sync_in_progress',
+                    $sync_result['message'],
+                    array('status' => 409)
                 );
             }
 

@@ -88,8 +88,17 @@ class AutoSEO_API {
             return new WP_Error('no_api_key', __('API key is not configured', 'getautoseo-ai-content-publisher'));
         }
 
+        // Publishing a large article can take a long time on slow shared hosting.
+        // Without this, PHP kills the request mid-sync and the article never lands.
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(300);
+        }
+
         // Prevent concurrent sync operations (race condition → duplicate posts).
         // Uses a DB row lock: INSERT succeeds only for the first caller; others bail out.
+        // Pushes deliberately share this lock with pull syncs: letting them run side
+        // by side would let both create a post for the same article. A push that loses
+        // the race reports a conflict and AutoSEO retries it shortly.
         $lock_table = $wpdb->prefix . 'autoseo_settings';
         $lock_key   = 'sync_lock';
         $lock_value = time() . '|' . wp_generate_uuid4();
@@ -108,7 +117,9 @@ class AutoSEO_API {
             $should_clear = false;
             $lock_parts = explode('|', $existing_lock->setting_value, 2);
 
-            if (is_numeric($lock_parts[0]) && (time() - intval($lock_parts[0])) > $lock_max_age) {
+            if (is_numeric($lock_parts[0]) && abs(time() - intval($lock_parts[0])) > $lock_max_age) {
+                // abs() also catches locks stamped in the future by a skewed clock,
+                // which would otherwise never expire and block syncing permanently.
                 $should_clear = true;
                 $this->log_debug(sprintf(
                     'Clearing expired sync lock (age: %ds, max: %ds)',
@@ -135,23 +146,58 @@ class AutoSEO_API {
             $lock_value
         ));
 
-        if (!$lock_acquired) {
+        // Distinguish "someone else holds the lock" (INSERT IGNORE affected 0 rows)
+        // from "the lock query itself failed" (false — e.g. the settings table is
+        // missing). Treating a broken lock table as a held lock would silently
+        // disable syncing forever, so in that case we continue without a lock.
+        if ($lock_acquired === false) {
+            $this->log_debug('Sync lock unavailable (' . $wpdb->last_error . ') - continuing without a lock');
+            $lock_held = false;
+        } elseif (!$lock_acquired) {
             $this->log_debug('Sync skipped: another sync operation is already in progress');
             return array(
-                'success' => true,
-                'message' => __('Sync skipped: already in progress', 'getautoseo-ai-content-publisher'),
+                'success' => false,
+                'skipped' => true,
+                'message' => __('Sync skipped: another sync is already in progress', 'getautoseo-ai-content-publisher'),
                 'synced_count' => 0,
                 'errors' => array(),
             );
+        } else {
+            $lock_held = true;
+        }
+
+        // A PHP fatal error or an execution timeout aborts the request without
+        // running finally blocks, which used to strand the lock and block every
+        // later sync. Shutdown functions still run, so release it there too.
+        if ($lock_held) {
+            register_shutdown_function(array($this, 'release_sync_lock'), $lock_key, $lock_value);
         }
 
         try {
             return $this->do_sync_articles($force_resync, $pushed_articles, $deleted_article_ids, $auto_publish);
         } finally {
-            // Release lock
-            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-            $wpdb->delete($lock_table, array('setting_key' => $lock_key, 'setting_value' => $lock_value), array('%s', '%s'));
+            if ($lock_held) {
+                $this->release_sync_lock($lock_key, $lock_value);
+            }
         }
+    }
+
+    /**
+     * Release a sync lock row. Safe to call more than once: it only deletes the
+     * row this request created, so it can never release someone else's lock.
+     *
+     * @param string $lock_key   Lock row key
+     * @param string $lock_value Lock value owned by this request
+     */
+    public function release_sync_lock($lock_key, $lock_value) {
+        global $wpdb;
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $wpdb->delete(
+            $wpdb->prefix . 'autoseo_settings',
+            array('setting_key' => $lock_key, 'setting_value' => $lock_value),
+            array('%s', '%s')
+        );
     }
 
     /**
@@ -237,7 +283,17 @@ class AutoSEO_API {
         // Save sync time BEFORE processing to prevent timeout-induced loops.
         // If the plugin times out mid-processing, the next sync will use 'since'
         // and only fetch changed articles instead of re-fetching everything.
+        // When we deliberately defer articles below we roll this back, so the
+        // deferred ones are picked up again on the next run.
+        $previous_sync_time = get_option('autoseo_last_sync_time');
         update_option('autoseo_last_sync_time', current_time('c'));
+
+        // Stop before PHP does. A large backlog on slow hosting used to consume the
+        // whole request and get killed mid-article, so nothing was ever published.
+        // Deferred articles are simply picked up by the next sync.
+        $time_budget = (int) apply_filters('autoseo_sync_time_budget', 60, $is_push_mode);
+        $started_at = microtime(true);
+        $deferred_count = 0;
 
         // Recover articles stuck in 'publishing' status (process crashed mid-publish).
         // Reset to 'pending' if they've been in 'publishing' for over 300 seconds.
@@ -315,6 +371,13 @@ class AutoSEO_API {
         try {
 
         foreach ($articles as $article) {
+            // Never defer a directed push: the server sends only the articles it
+            // specifically needs published, and there is no later run to catch them.
+            if (!$is_push_mode && $time_budget > 0 && (microtime(true) - $started_at) > $time_budget) {
+                $deferred_count++;
+                continue;
+            }
+
             try {
                 // Validate required fields
                 if (empty($article['id']) || empty($article['title'])) {
@@ -749,10 +812,11 @@ class AutoSEO_API {
                             }
                         }
 
-                        // FAQ schema is stored separately from post content. Older posts
-                        // can therefore look up-to-date while their JSON-LD meta was never
-                        // saved. Refresh those posts so the publisher restores the meta.
-                        $missing_faq_schema = false;
+                        // FAQ schema is stored separately from post content, so a post can
+                        // look up-to-date while its JSON-LD meta was never saved. Restore
+                        // the meta in place. Forcing a full content refresh instead turned
+                        // every affected post into a slow rewrite, and on slow hosts the
+                        // sync ran out of execution time before reaching new articles.
                         if (!empty($article['faq_schema'])) {
                             $stored_faq_schema = get_post_meta($wp_post->ID, '_autoseo_faq_schema', true);
                             $stored_faqs = is_string($stored_faq_schema)
@@ -760,9 +824,9 @@ class AutoSEO_API {
                                 : $stored_faq_schema;
 
                             if (empty($stored_faqs) || !is_array($stored_faqs)) {
-                                $missing_faq_schema = true;
+                                update_post_meta($wp_post->ID, '_autoseo_faq_schema', $article['faq_schema']);
                                 $this->log_debug(sprintf(
-                                    'Article "%s" is missing FAQ schema meta - refreshing structured data',
+                                    'Restored missing FAQ schema meta for article "%s" without rewriting the post',
                                     $article['title']
                                 ));
                             }
@@ -791,7 +855,6 @@ class AutoSEO_API {
                             && $synced_at_utc > 0
                             && $api_updated_at <= $synced_at_utc
                             && !$missing_assets
-                            && !$missing_faq_schema
                             && !$force_content_update
                         ) {
                             if ($needs_url_confirmation) {
@@ -958,6 +1021,21 @@ class AutoSEO_API {
             $this->log_debug(sprintf('Sent batched webhook for %d articles', count($batched_webhooks)));
         }
 
+        if ($deferred_count > 0) {
+            // Rewind the cursor so the deferred articles are fetched again next run.
+            if ($previous_sync_time) {
+                update_option('autoseo_last_sync_time', $previous_sync_time);
+            } else {
+                delete_option('autoseo_last_sync_time');
+            }
+
+            $this->log_debug(sprintf(
+                'Deferred %d article(s) to the next sync after %ds time budget',
+                $deferred_count,
+                $time_budget
+            ));
+        }
+
         return array(
             'success' => true,
             'message' => sprintf(
@@ -966,6 +1044,7 @@ class AutoSEO_API {
                 $synced_count
             ),
             'synced_count' => $synced_count,
+            'deferred_count' => $deferred_count,
             'errors' => $errors,
         );
     }

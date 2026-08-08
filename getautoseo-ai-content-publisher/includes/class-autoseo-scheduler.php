@@ -125,9 +125,16 @@ class AutoSEO_Scheduler {
                 $error_message = $result->get_error_message();
                 $this->log_debug('Auto-sync failed: ' . $error_message);
                 self::store_sync_error($error_message);
+            } elseif (!empty($result['skipped'])) {
+                // A skipped sync published nothing, so it must never be reported as a
+                // success: doing so cleared the error state and told AutoSEO everything
+                // was fine while the site silently stopped publishing.
+                $this->handle_skipped_auto_sync($api, $result);
             } else {
                 $this->log_debug('Auto-sync completed: ' . $result['synced_count'] . ' articles synced');
-                
+
+                delete_option('autoseo_consecutive_sync_skips');
+
                 // Clear connection error on successful API call (individual article errors are different)
                 self::clear_sync_error();
                 
@@ -149,6 +156,42 @@ class AutoSEO_Scheduler {
             $this->log_debug('Auto-sync exception: ' . $e->getMessage());
             self::store_sync_error($e->getMessage());
         }
+    }
+
+    /**
+     * Handle an auto-sync that bailed out because another sync held the lock.
+     *
+     * One skipped run is normal when a manual sync or a server push overlaps the
+     * cron. Several in a row means the lock is stranded or a sync keeps dying, so
+     * report it as a real error to both the plugin admin and AutoSEO.
+     *
+     * @param AutoSEO_API $api    API client used to send the webhook
+     * @param array       $result Skipped sync result
+     */
+    private function handle_skipped_auto_sync($api, $result) {
+        $skips = (int) get_option('autoseo_consecutive_sync_skips', 0) + 1;
+        update_option('autoseo_consecutive_sync_skips', $skips, false);
+
+        $this->log_debug(sprintf('Auto-sync skipped (%d in a row): %s', $skips, $result['message']));
+
+        if ($skips < 3) {
+            return;
+        }
+
+        $error_message = sprintf(
+            /* translators: %d: number of consecutive skipped syncs */
+            __('Sync has been blocked by an unfinished sync %d times in a row. Articles are not being published.', 'getautoseo-ai-content-publisher'),
+            $skips
+        );
+
+        self::store_sync_error($error_message);
+
+        $api->send_webhook('sync_completed', array(
+            'articles_count' => 0,
+            'errors_count' => 1,
+            'errors' => array($error_message),
+            'skipped' => true,
+        ));
     }
 
     /**

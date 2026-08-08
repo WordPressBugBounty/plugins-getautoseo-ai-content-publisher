@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.101
+Stable tag: 1.3.102
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,12 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.102 =
+* FIXED: Syncing could stop indefinitely after an interrupted sync. The lock left behind is now released automatically, and any lock stranded by an earlier version is cleared on update.
+* FIXED: A skipped sync is no longer reported as a successful one, so "Sync Now" and AutoSEO tell you when nothing was published instead of appearing to work.
+* FIXED: Restoring missing FAQ structured data no longer rewrites the whole article, which could use up the available time on slower hosting before new articles were published.
+* IMPROVED: Large sync backlogs are now spread across several runs instead of trying to finish in one, and AutoSEO retries an article automatically when a sync was already running.
 
 = 1.3.101 =
 * IMPROVED: Increased the authenticated AutoSEO sync request limit to handle short publishing bursts without interrupting syncs.

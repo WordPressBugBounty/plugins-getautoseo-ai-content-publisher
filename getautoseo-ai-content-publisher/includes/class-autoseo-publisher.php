@@ -426,9 +426,16 @@ class AutoSEO_Publisher {
         // This ensures proper SEO-friendly URLs instead of fallback ?p=ID format.
         // Prefer the slug supplied by AutoSEO (an English slug for non-Latin titles like
         // Traditional Chinese) so the permalink is readable instead of a URL-encoded title.
-        $post_slug = (!empty($article->slug))
-            ? sanitize_title($article->slug)
-            : sanitize_title($article->title);
+        // Keep WordPress post names portable: lowercase ASCII letters, digits, and hyphens only.
+        $raw_slug = !empty($article->slug) ? $article->slug : $article->title;
+        $post_slug = sanitize_title($raw_slug);
+        $post_slug = strtolower((string) preg_replace('/[^a-z0-9]+/', '-', $post_slug));
+        $post_slug = trim($post_slug, '-');
+
+        if ($post_slug === '') {
+            $post_slug = 'article-' . absint($article->autoseo_id);
+        }
+
         $post_data = array(
             'post_title' => $article->title,
             'post_name' => $post_slug,

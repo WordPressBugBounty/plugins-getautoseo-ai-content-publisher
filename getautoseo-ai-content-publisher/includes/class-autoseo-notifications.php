@@ -273,7 +273,17 @@ class AutoSEO_Notifications {
                 ));
                 return;
             }
-            
+
+            // A skipped sync did nothing, so telling the user it succeeded left them
+            // clicking "Sync Now" against a stuck sync with no idea why nothing changed.
+            if (!empty($result['skipped'])) {
+                wp_send_json_error(array(
+                    'message' => __('Another sync is still running, so this one was skipped. Wait a few minutes and try again.', 'getautoseo-ai-content-publisher'),
+                    'skipped' => true,
+                ));
+                return;
+            }
+
             // Clear any dismissed notification transients
             delete_transient('autoseo_notification_dismissed');
             

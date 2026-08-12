@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.102
+ * Version: 1.3.103
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.102');
+define('AUTOSEO_VERSION', '1.3.103');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -645,6 +645,9 @@ class AutoSEO_Plugin {
         // Wrapped defensively so a transient DB hiccup can never turn into an
         // every-request error loop.
         try {
+            // Recreate the articles table first: the column migrations below are
+            // no-ops (and log errors) if the base table is missing entirely.
+            $this->create_articles_table_if_missing();
             $this->add_featured_image_column();
             $this->add_hero_image_column();
             $this->add_infographic_column();
@@ -675,6 +678,9 @@ class AutoSEO_Plugin {
         
         // ALWAYS run idempotent migrations (they check if column exists first)
         // This ensures columns are added even if version was updated before migration code existed
+        // Recreate the base articles table first so the column migrations have a
+        // table to operate on (handles a dropped/never-created articles table).
+        $this->create_articles_table_if_missing();
         $this->add_featured_image_column();
         $this->add_hero_image_column();
         $this->add_infographic_column();
@@ -1938,6 +1944,37 @@ class AutoSEO_Plugin {
 
         // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
         error_log('[AutoSEO] Recreated missing settings table');
+    }
+
+    /**
+     * Recreate the main autoseo_articles table if it is completely missing.
+     *
+     * The table is normally created on activation, but it can disappear on some
+     * hosts (a failed/interrupted activation, a database restore from a backup
+     * taken before the plugin was installed, a host migration, or a manual drop).
+     * When that happens every sync fails permanently with
+     * "Table '..._autoseo_articles' doesn't exist", and the column migrations
+     * (add_*_column) silently do nothing because there is no table to alter.
+     * This self-heal mirrors create_settings_table_if_missing() so a missing
+     * articles table repairs itself instead of stranding the customer.
+     */
+    public function create_articles_table_if_missing() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'autoseo_articles';
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name));
+        if ($exists === $table_name) {
+            return;
+        }
+
+        // create_tables() is idempotent (dbDelta + column checks) and rebuilds the
+        // full schema, so it safely brings a missing table back to current shape.
+        $this->create_tables();
+
+        // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+        error_log('[AutoSEO] Recreated missing autoseo_articles table');
     }
 
     /**

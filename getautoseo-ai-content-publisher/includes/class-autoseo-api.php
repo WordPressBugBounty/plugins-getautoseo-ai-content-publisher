@@ -275,6 +275,16 @@ class AutoSEO_API {
         $synced_count = 0;
         $errors = array();
 
+        // Self-heal: if the articles table is missing (failed activation, DB
+        // restore, host migration, manual drop) every insert below would fail with
+        // "Table doesn't exist". Recreate it now so this sync can proceed instead
+        // of waiting for the hourly init-time schema check.
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name)) !== $table_name
+            && class_exists('AutoSEO_Plugin')) {
+            AutoSEO_Plugin::get_instance()->create_articles_table_if_missing();
+        }
+
         // Trash WordPress posts for articles deleted from the AutoSEO dashboard
         if (!empty($deleted_article_ids)) {
             $this->trash_deleted_articles($deleted_article_ids, $table_name);

@@ -593,6 +593,8 @@ class AutoSEO_Publisher {
         // Set WordPress tags
         $this->set_wordpress_tags($post_id, $article);
 
+        $this->sync_content_to_acf_fields($post_id);
+
         // Update sync table with post_id and published status
         $wpdb->update(
             $table_name,
@@ -1496,6 +1498,10 @@ class AutoSEO_Publisher {
         // Update WordPress tags
         $this->set_wordpress_tags($existing_post->ID, $article);
 
+        if (!$page_builder && !$manual_content_override) {
+            $this->sync_content_to_acf_fields($existing_post->ID);
+        }
+
         // Update sync table
         $wpdb->update(
             $table_name,
@@ -1863,6 +1869,225 @@ class AutoSEO_Publisher {
                 implode(', ', $cleared)
             ));
         }
+    }
+
+    /**
+     * Copy AutoSEO post title/excerpt/body into empty ACF fields.
+     *
+     * Some themes never call the_content() and instead render ACF wysiwyg or
+     * flexible-content fields. Writing those fields makes the article show in
+     * both the theme and the WordPress editor.
+     *
+     * Existing non-empty field values are left untouched so user edits stay.
+     *
+     * @param int $post_id WordPress post ID
+     */
+    public function sync_content_to_acf_fields($post_id) {
+        if (!function_exists('acf_get_field_groups') || !function_exists('update_field') || !function_exists('get_field')) {
+            return;
+        }
+
+        $post = get_post($post_id);
+        if (!$post || $post->post_status === 'auto-draft') {
+            return;
+        }
+
+        $groups = acf_get_field_groups(array('post_id' => $post_id));
+        if (empty($groups) || !is_array($groups)) {
+            update_post_meta($post_id, '_autoseo_acf_synced', current_time('mysql'));
+            return;
+        }
+
+        $filled = array();
+        foreach ($groups as $group) {
+            $fields = function_exists('acf_get_fields') ? acf_get_fields($group) : array();
+            if (empty($fields) || !is_array($fields)) {
+                continue;
+            }
+            $this->fill_acf_fields_from_post($fields, $post, $filled);
+        }
+
+        if (!empty($filled)) {
+            $this->log_debug(sprintf(
+                'Copied AutoSEO content into empty ACF fields for post %d: %s',
+                $post_id,
+                implode(', ', $filled)
+            ));
+        }
+
+        update_post_meta($post_id, '_autoseo_acf_synced', current_time('mysql'));
+    }
+
+    /**
+     * Recursively fill empty ACF fields that map to title, excerpt, or body.
+     *
+     * @param array    $fields  ACF field arrays
+     * @param WP_Post  $post    WordPress post
+     * @param string[] $filled  Field names written during this pass
+     */
+    private function fill_acf_fields_from_post($fields, $post, &$filled) {
+        $title_names = array('title', 'titel', 'kop', 'headline', 'heading', 'post_title', 'pagina_titel');
+        $excerpt_names = array(
+            'excerpt', 'intro', 'inleiding', 'samenvatting', 'lead', 'subtitle',
+            'subtitel', 'intro_text', 'intro_tekst', 'tekst_intro', 'news_intro',
+            'nieuws_intro', 'inleiding_tekst',
+        );
+        $content_names = array(
+            'content', 'content_text', 'tekst', 'text', 'body', 'inhoud',
+            'article_content', 'artikel', 'wysiwyg', 'beschrijving', 'description',
+            'bericht', 'artikel_tekst', 'post_content',
+        );
+
+        $wysiwyg_candidates = array();
+
+        foreach ($fields as $field) {
+            if (empty($field['name']) || empty($field['type'])) {
+                continue;
+            }
+
+            $name = strtolower((string) $field['name']);
+            $type = $field['type'];
+            $post_id = $post->ID;
+
+            if ($type === 'group' && !empty($field['sub_fields'])) {
+                $this->fill_acf_fields_from_post($field['sub_fields'], $post, $filled);
+                continue;
+            }
+
+            if ($type === 'flexible_content') {
+                $this->fill_empty_acf_flexible_content($field, $post, $filled);
+                continue;
+            }
+
+            $current = get_field($field['key'], $post_id, false);
+            if ($this->acf_value_has_content($current)) {
+                continue;
+            }
+
+            $value = null;
+            if ($type === 'text' && in_array($name, $title_names, true)) {
+                $value = $post->post_title;
+            } elseif (in_array($type, array('textarea', 'wysiwyg', 'text'), true) && in_array($name, $excerpt_names, true)) {
+                $value = $post->post_excerpt;
+            } elseif (in_array($type, array('wysiwyg', 'textarea'), true) && in_array($name, $content_names, true)) {
+                $value = $post->post_content;
+            } elseif ($type === 'wysiwyg') {
+                $wysiwyg_candidates[] = $field;
+                continue;
+            }
+
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            update_field($field['key'], $value, $post_id);
+            $filled[] = $field['name'];
+        }
+
+        // If the field group has exactly one empty unnamed wysiwyg, treat it as the body.
+        if (count($wysiwyg_candidates) === 1 && !empty($post->post_content)) {
+            $field = $wysiwyg_candidates[0];
+            update_field($field['key'], $post->post_content, $post->ID);
+            $filled[] = $field['name'];
+        }
+    }
+
+    /**
+     * Insert one flexible-content row when the field is empty and a simple
+     * wysiwyg/textarea layout exists. Nested brick builders are skipped.
+     *
+     * @param array    $field   ACF flexible_content field
+     * @param WP_Post  $post    WordPress post
+     * @param string[] $filled  Field names written during this pass
+     */
+    private function fill_empty_acf_flexible_content($field, $post, &$filled) {
+        $current = get_field($field['key'], $post->ID, false);
+        if ($this->acf_value_has_content($current)) {
+            return;
+        }
+
+        if (empty($field['layouts']) || !is_array($field['layouts'])) {
+            return;
+        }
+
+        foreach ($field['layouts'] as $layout) {
+            $row = $this->build_simple_acf_flexible_row($layout, $post);
+            if ($row === null) {
+                continue;
+            }
+            update_field($field['key'], array($row), $post->ID);
+            $filled[] = $field['name'] . ':' . $row['acf_fc_layout'];
+            return;
+        }
+    }
+
+    /**
+     * Build a flexible-content row when every subfield is a simple input and
+     * at least one can hold the article body.
+     *
+     * @param array   $layout ACF layout array
+     * @param WP_Post $post   WordPress post
+     * @return array|null
+     */
+    private function build_simple_acf_flexible_row($layout, $post) {
+        if (empty($layout['name']) || empty($layout['sub_fields']) || !is_array($layout['sub_fields'])) {
+            return null;
+        }
+
+        $complex_types = array('flexible_content', 'repeater', 'group', 'relationship', 'post_object', 'page_link', 'taxonomy', 'user', 'clone');
+        $body_subfield = null;
+        $title_subfield = null;
+        $excerpt_subfield = null;
+
+        foreach ($layout['sub_fields'] as $sub) {
+            if (empty($sub['name']) || empty($sub['type'])) {
+                return null;
+            }
+            if (in_array($sub['type'], $complex_types, true)) {
+                return null;
+            }
+            $sub_name = strtolower((string) $sub['name']);
+            if ($sub['type'] === 'wysiwyg' || in_array($sub_name, array('content', 'tekst', 'text', 'body', 'inhoud', 'wysiwyg'), true)) {
+                $body_subfield = $sub['name'];
+            }
+            if (in_array($sub_name, array('title', 'titel', 'kop', 'headline'), true)) {
+                $title_subfield = $sub['name'];
+            }
+            if (in_array($sub_name, array('excerpt', 'intro', 'inleiding', 'lead'), true)) {
+                $excerpt_subfield = $sub['name'];
+            }
+        }
+
+        if ($body_subfield === null) {
+            return null;
+        }
+
+        $row = array('acf_fc_layout' => $layout['name']);
+        $row[$body_subfield] = $post->post_content;
+        if ($title_subfield) {
+            $row[$title_subfield] = $post->post_title;
+        }
+        if ($excerpt_subfield && !empty($post->post_excerpt)) {
+            $row[$excerpt_subfield] = $post->post_excerpt;
+        }
+
+        return $row;
+    }
+
+    /**
+     * Whether an ACF raw value already contains user or generated content.
+     *
+     * @param mixed $value Raw ACF value
+     * @return bool
+     */
+    private function acf_value_has_content($value) {
+        if ($value === null || $value === false || $value === '') {
+            return false;
+        }
+        if (is_array($value)) {
+            return !empty($value);
+        }
+        return trim(wp_strip_all_tags((string) $value)) !== '';
     }
 
     /**

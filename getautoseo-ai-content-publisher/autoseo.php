@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.103
+ * Version: 1.3.104
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.103');
+define('AUTOSEO_VERSION', '1.3.104');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -115,6 +115,13 @@ class AutoSEO_Plugin {
         // LLM-friendly .md URL support
         add_action('init', array($this, 'register_md_rewrite_rules'));
         add_action('template_redirect', array($this, 'handle_md_url_request'));
+
+        // Themes that render ACF/page-builder fields instead of the_content()
+        // leave AutoSEO posts looking empty. Fill ACF when we can, and inject
+        // post_content into empty theme containers as a last resort.
+        add_action('wp', array($this, 'maybe_sync_autoseo_content_to_acf'));
+        add_action('template_redirect', array($this, 'maybe_buffer_autoseo_theme_fallback'), 1);
+        add_filter('acf/load_field_group', array($this, 'keep_content_editor_visible_for_autoseo_posts'), 20);
 
         // REST API endpoints
         add_action('rest_api_init', array($this, 'register_rest_routes'));
@@ -611,6 +618,233 @@ class AutoSEO_Plugin {
     }
 
     /**
+     * On the front end, copy post_content into empty ACF fields before the
+     * theme template runs. This backfills articles published before 1.3.104.
+     */
+    public function maybe_sync_autoseo_content_to_acf() {
+        if (is_admin() || !is_singular()) {
+            return;
+        }
+
+        $post = get_queried_object();
+        if (!$post || empty($post->ID) || !$this->is_autoseo_article($post->ID)) {
+            return;
+        }
+
+        if (!function_exists('acf_get_field_groups')) {
+            return;
+        }
+
+        if (get_post_meta($post->ID, '_autoseo_acf_synced', true)) {
+            return;
+        }
+
+        $publisher = new AutoSEO_Publisher();
+        $publisher->sync_content_to_acf_fields($post->ID);
+    }
+
+    /**
+     * Start an output buffer so we can inject the article when the theme
+     * renders an empty shell (ACF bricks, custom title fields, etc.).
+     */
+    public function maybe_buffer_autoseo_theme_fallback() {
+        if (is_admin() || wp_doing_ajax() || wp_doing_cron() || is_feed()) {
+            return;
+        }
+        if (defined('REST_REQUEST') && REST_REQUEST) {
+            return;
+        }
+        if (!is_singular()) {
+            return;
+        }
+
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+        if ($request_uri !== '' && preg_match('/\.md(?:\?|$)/', $request_uri)) {
+            return;
+        }
+
+        $post = get_queried_object();
+        if (!$post || empty($post->post_content) || !$this->is_autoseo_article($post->ID)) {
+            return;
+        }
+
+        ob_start(array($this, 'inject_autoseo_content_into_empty_theme'));
+    }
+
+    /**
+     * Fill empty theme title/body containers, or insert the article before
+     * the footer when the rendered HTML does not contain the post body.
+     *
+     * @param string $html Full page HTML
+     * @return string
+     */
+    public function inject_autoseo_content_into_empty_theme($html) {
+        if (!is_string($html) || $html === '') {
+            return $html;
+        }
+
+        $post = get_queried_object();
+        if (!$post || empty($post->post_content)) {
+            return $html;
+        }
+
+        $title = get_the_title($post);
+        if ($title !== '') {
+            $html = preg_replace_callback(
+                '/(<h1\b[^>]*\bclass="[^"]*\btitle\b[^"]*"[^>]*>)\s*(<\/h1>)/i',
+                function ($match) use ($title) {
+                    return $match[1] . esc_html($title) . $match[2];
+                },
+                $html,
+                1
+            );
+        }
+
+        if ($this->autoseo_content_appears_in_html($html, $post->post_content)) {
+            return $html;
+        }
+
+        $content = apply_filters('the_content', $post->post_content);
+        if (!is_string($content) || trim(wp_strip_all_tags($content)) === '') {
+            return $html;
+        }
+
+        $block = '<div class="autoseo-theme-content-fallback">' . $content . '</div>';
+        $injected = $this->insert_autoseo_fallback_block($html, $block);
+
+        return is_string($injected) ? $injected : $html;
+    }
+
+    /**
+     * Insert fallback HTML into the first empty theme content container.
+     *
+     * @param string $html  Page HTML
+     * @param string $block Markup to insert
+     * @return string|null
+     */
+    private function insert_autoseo_fallback_block($html, $block) {
+        $patterns = array(
+            '/(<div\b[^>]*\bclass="[^"]*\bcomponent-group-flexible\b[^"]*"[^>]*>)\s*(<\/div>)/i',
+            '/(<div\b[^>]*\bclass="[^"]*\b(entry-content|post-content|article-content)\b[^"]*"[^>]*>)\s*(<\/div>)/i',
+        );
+
+        foreach ($patterns as $pattern) {
+            $count = 0;
+            $replaced = preg_replace_callback(
+                $pattern,
+                function ($match) use ($block) {
+                    return $match[1] . $block . $match[count($match) - 1];
+                },
+                $html,
+                1,
+                $count
+            );
+            if (is_string($replaced) && $count > 0) {
+                return $replaced;
+            }
+        }
+
+        $count = 0;
+        $replaced = preg_replace_callback(
+            '/(<div\b[^>]*\bclass="[^"]*\bnews-single-socials\b[^"]*")/i',
+            function ($match) use ($block) {
+                return $block . $match[1];
+            },
+            $html,
+            1,
+            $count
+        );
+        if (is_string($replaced) && $count > 0) {
+            return $replaced;
+        }
+
+        $count = 0;
+        $replaced = preg_replace_callback(
+            '/(<\/h1>)/i',
+            function ($match) use ($block) {
+                return $match[1] . $block;
+            },
+            $html,
+            1,
+            $count
+        );
+        if (is_string($replaced) && $count > 0) {
+            return $replaced;
+        }
+
+        return null;
+    }
+
+    /**
+     * True when a distinctive snippet of the stored article is already visible.
+     *
+     * @param string $html         Rendered page HTML
+     * @param string $post_content Stored post_content
+     * @return bool
+     */
+    private function autoseo_content_appears_in_html($html, $post_content) {
+        $plain_content = html_entity_decode(wp_strip_all_tags($post_content), ENT_QUOTES, 'UTF-8');
+        $plain_content = trim(preg_replace('/\s+/u', ' ', $plain_content));
+        if (strlen($plain_content) < 40) {
+            return true;
+        }
+
+        $snippet = substr($plain_content, 0, 80);
+        $plain_html = html_entity_decode(wp_strip_all_tags($html), ENT_QUOTES, 'UTF-8');
+        $plain_html = preg_replace('/\s+/u', ' ', $plain_html);
+
+        return $plain_html !== null && stripos($plain_html, $snippet) !== false;
+    }
+
+    /**
+     * ACF field groups often hide the WordPress content editor. AutoSEO stores
+     * the article in post_content, so keep that editor visible on our posts.
+     *
+     * @param array $group ACF field group
+     * @return array
+     */
+    public function keep_content_editor_visible_for_autoseo_posts($group) {
+        if (empty($group['hide_on_screen']) || !is_admin()) {
+            return $group;
+        }
+
+        $post_id = 0;
+        if (!empty($_GET['post'])) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+            $post_id = absint(wp_unslash($_GET['post']));
+        } elseif (!empty($_POST['post_ID'])) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+            $post_id = absint(wp_unslash($_POST['post_ID']));
+        }
+
+        if (!$post_id || !$this->is_autoseo_article($post_id)) {
+            return $group;
+        }
+
+        $group['hide_on_screen'] = array_values(array_diff((array) $group['hide_on_screen'], array('the_content')));
+        return $group;
+    }
+
+    /**
+     * Clear full-page caches so a previously empty article URL is rebuilt.
+     */
+    private function purge_page_caches_after_content_fix() {
+        if (function_exists('rocket_clean_domain')) {
+            rocket_clean_domain();
+        }
+        if (function_exists('wp_cache_flush')) {
+            wp_cache_flush();
+        }
+        if (function_exists('w3tc_flush_all')) {
+            w3tc_flush_all();
+        }
+        if (function_exists('sg_cachepress_purge_cache')) {
+            sg_cachepress_purge_cache();
+        }
+        if (class_exists('LiteSpeed_Cache_API') && method_exists('LiteSpeed_Cache_API', 'purge_all')) {
+            LiteSpeed_Cache_API::purge_all();
+        }
+    }
+
+    /**
      * Ensure database schema is up to date (runs on every init for cron compatibility)
      *
      * Throttling uses a plain (autoloaded) option storing the last-check timestamp
@@ -710,6 +944,13 @@ class AutoSEO_Plugin {
         // every later sync bails out on a lock whose owner will never return.
         if (version_compare($installed_version, '1.3.102', '<')) {
             $this->clear_stranded_sync_locks();
+        }
+
+        // ACF/theme-fallback content fix: existing AutoSEO posts were stored in
+        // post_content but never shown. Purge page caches so the new renderer
+        // is not hidden behind a cached empty HTML file (e.g. WP Rocket).
+        if (version_compare($installed_version, '1.3.104', '<')) {
+            $this->purge_page_caches_after_content_fix();
         }
 
         // If installed version is less than current, log the upgrade

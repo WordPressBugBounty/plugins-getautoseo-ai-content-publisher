@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.103
+Stable tag: 1.3.104
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.104 =
+* FIXED: Articles could show as live in AutoSEO but appear empty on the website when the theme reads Advanced Custom Fields (or a similar brick/flexible layout) instead of the WordPress post body. The plugin now copies content into empty ACF fields when possible, keeps the WordPress content editor visible for AutoSEO posts, and injects the article into empty theme containers so the live page shows the full text.
 
 = 1.3.103 =
 * FIXED: Syncing could fail forever with "Table 'wp_autoseo_articles' doesn't exist" if the plugin's article table went missing (a failed activation, a database restore, or a host migration). The table now rebuilds itself automatically, so articles start syncing again without a reinstall.

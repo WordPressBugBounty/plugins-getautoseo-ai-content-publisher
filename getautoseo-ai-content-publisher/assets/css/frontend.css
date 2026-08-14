@@ -106,6 +106,26 @@
     display: inline;
 }
 
+/*
+ * Fallback body for themes that render ACF/bricks instead of the_content().
+ * Spacing only — colors and fonts stay with the theme.
+ */
+.autoseo-theme-content-fallback {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    clear: both;
+}
+
+.autoseo-theme-content-fallback > * + * {
+    margin-top: 1em;
+}
+
+.autoseo-theme-content-fallback img {
+    max-width: 100%;
+    height: auto;
+}
+
 /* Print styles - ensure infographics print nicely */
 @media print {
     .autoseo-infographic-wrapper {

@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.104
+ * Version: 1.3.105
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.104');
+define('AUTOSEO_VERSION', '1.3.105');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -672,57 +672,76 @@ class AutoSEO_Plugin {
     }
 
     /**
-     * Fill empty theme title/body containers, or insert the article before
-     * the footer when the rendered HTML does not contain the post body.
+     * Fill empty theme title/body containers when the theme did not print
+     * the WordPress post body. Must always return a string — a null return
+     * from this output-buffer callback blanks the entire page.
      *
      * @param string $html Full page HTML
      * @return string
      */
     public function inject_autoseo_content_into_empty_theme($html) {
-        if (!is_string($html) || $html === '') {
-            return $html;
+        $original_html = is_string($html) ? $html : '';
+
+        try {
+            if ($original_html === '') {
+                return $original_html;
+            }
+
+            $post = get_queried_object();
+            if (!$post || empty($post->post_content)) {
+                return $original_html;
+            }
+
+            if ($this->autoseo_content_appears_in_html($original_html, $post->post_content)) {
+                return $original_html;
+            }
+
+            $html = $original_html;
+            $title = get_the_title($post);
+            if ($title !== '' && strpos($html, '</h1>') !== false) {
+                $replaced = $this->safe_preg_replace_callback(
+                    '/(<h1\b[^>]*\bclass="[^"]*\btitle\b[^"]*"[^>]*>)\s*(<\/h1>)/i',
+                    function ($match) use ($title) {
+                        return $match[1] . esc_html($title) . $match[2];
+                    },
+                    $html,
+                    1
+                );
+                if (is_string($replaced)) {
+                    $html = $replaced;
+                }
+            }
+
+            // Use stored HTML as-is. Re-running the_content() inside an
+            // output-buffer callback can fatal with cache plugins (LiteSpeed,
+            // WP Rocket) and wipe the page.
+            $content = $post->post_content;
+            if (!is_string($content) || trim(wp_strip_all_tags($content)) === '') {
+                return $html;
+            }
+
+            $block = '<div class="autoseo-theme-content-fallback">' . $content . '</div>';
+            $injected = $this->insert_autoseo_fallback_block($html, $block);
+
+            return is_string($injected) ? $injected : $html;
+        } catch (\Throwable $e) {
+            return $original_html;
         }
-
-        $post = get_queried_object();
-        if (!$post || empty($post->post_content)) {
-            return $html;
-        }
-
-        $title = get_the_title($post);
-        if ($title !== '') {
-            $html = preg_replace_callback(
-                '/(<h1\b[^>]*\bclass="[^"]*\btitle\b[^"]*"[^>]*>)\s*(<\/h1>)/i',
-                function ($match) use ($title) {
-                    return $match[1] . esc_html($title) . $match[2];
-                },
-                $html,
-                1
-            );
-        }
-
-        if ($this->autoseo_content_appears_in_html($html, $post->post_content)) {
-            return $html;
-        }
-
-        $content = apply_filters('the_content', $post->post_content);
-        if (!is_string($content) || trim(wp_strip_all_tags($content)) === '') {
-            return $html;
-        }
-
-        $block = '<div class="autoseo-theme-content-fallback">' . $content . '</div>';
-        $injected = $this->insert_autoseo_fallback_block($html, $block);
-
-        return is_string($injected) ? $injected : $html;
     }
 
     /**
-     * Insert fallback HTML into the first empty theme content container.
+     * Insert fallback HTML into a known-empty theme content container only.
+     * Does not inject after a random </h1> — that broke headers and sidebars.
      *
      * @param string $html  Page HTML
      * @param string $block Markup to insert
      * @return string|null
      */
     private function insert_autoseo_fallback_block($html, $block) {
+        if (!is_string($html) || $html === '') {
+            return null;
+        }
+
         $patterns = array(
             '/(<div\b[^>]*\bclass="[^"]*\bcomponent-group-flexible\b[^"]*"[^>]*>)\s*(<\/div>)/i',
             '/(<div\b[^>]*\bclass="[^"]*\b(entry-content|post-content|article-content)\b[^"]*"[^>]*>)\s*(<\/div>)/i',
@@ -730,7 +749,7 @@ class AutoSEO_Plugin {
 
         foreach ($patterns as $pattern) {
             $count = 0;
-            $replaced = preg_replace_callback(
+            $replaced = $this->safe_preg_replace_callback(
                 $pattern,
                 function ($match) use ($block) {
                     return $match[1] . $block . $match[count($match) - 1];
@@ -745,24 +764,10 @@ class AutoSEO_Plugin {
         }
 
         $count = 0;
-        $replaced = preg_replace_callback(
+        $replaced = $this->safe_preg_replace_callback(
             '/(<div\b[^>]*\bclass="[^"]*\bnews-single-socials\b[^"]*")/i',
             function ($match) use ($block) {
                 return $block . $match[1];
-            },
-            $html,
-            1,
-            $count
-        );
-        if (is_string($replaced) && $count > 0) {
-            return $replaced;
-        }
-
-        $count = 0;
-        $replaced = preg_replace_callback(
-            '/(<\/h1>)/i',
-            function ($match) use ($block) {
-                return $match[1] . $block;
             },
             $html,
             1,
@@ -776,6 +781,26 @@ class AutoSEO_Plugin {
     }
 
     /**
+     * preg_replace_callback that keeps the original subject when PCRE fails.
+     *
+     * @param string   $pattern  Regex
+     * @param callable $callback Replacement
+     * @param string   $subject  HTML
+     * @param int      $limit    Match limit
+     * @param int      $count    Match count (output)
+     * @return string
+     */
+    private function safe_preg_replace_callback($pattern, $callback, $subject, $limit = 1, &$count = 0) {
+        $count = 0;
+        if (!is_string($subject)) {
+            return '';
+        }
+
+        $result = preg_replace_callback($pattern, $callback, $subject, $limit, $count);
+        return is_string($result) ? $result : $subject;
+    }
+
+    /**
      * True when a distinctive snippet of the stored article is already visible.
      *
      * @param string $html         Rendered page HTML
@@ -783,17 +808,57 @@ class AutoSEO_Plugin {
      * @return bool
      */
     private function autoseo_content_appears_in_html($html, $post_content) {
-        $plain_content = html_entity_decode(wp_strip_all_tags($post_content), ENT_QUOTES, 'UTF-8');
-        $plain_content = trim(preg_replace('/\s+/u', ' ', $plain_content));
+        $plain_content = $this->normalize_plain_text_for_theme_fallback($post_content);
         if (strlen($plain_content) < 40) {
             return true;
         }
 
-        $snippet = substr($plain_content, 0, 80);
-        $plain_html = html_entity_decode(wp_strip_all_tags($html), ENT_QUOTES, 'UTF-8');
-        $plain_html = preg_replace('/\s+/u', ' ', $plain_html);
+        $plain_html = $this->normalize_plain_text_for_theme_fallback($html);
+        if ($plain_html === '') {
+            return false;
+        }
 
-        return $plain_html !== null && stripos($plain_html, $snippet) !== false;
+        $offsets = array(0, 160, 400);
+        foreach ($offsets as $offset) {
+            if ($offset >= strlen($plain_content)) {
+                break;
+            }
+            $snippet = trim(substr($plain_content, $offset, 80));
+            if (strlen($snippet) < 40) {
+                continue;
+            }
+            if (stripos($plain_html, $snippet) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Strip tags and normalize quotes so wptexturize curly apostrophes still match.
+     *
+     * @param string $text Raw HTML or text
+     * @return string
+     */
+    private function normalize_plain_text_for_theme_fallback($text) {
+        if (!is_string($text) || $text === '') {
+            return '';
+        }
+
+        $plain = html_entity_decode(wp_strip_all_tags($text), ENT_QUOTES, 'UTF-8');
+        $plain = preg_replace('/\s+/u', ' ', $plain);
+        if (!is_string($plain)) {
+            return '';
+        }
+
+        $plain = str_replace(
+            array("\xE2\x80\x98", "\xE2\x80\x99", "\xE2\x80\x9C", "\xE2\x80\x9D", "\xE2\x80\x93", "\xE2\x80\x94"),
+            array("'", "'", '"', '"', '-', '-'),
+            $plain
+        );
+
+        return trim($plain);
     }
 
     /**
@@ -950,6 +1015,12 @@ class AutoSEO_Plugin {
         // post_content but never shown. Purge page caches so the new renderer
         // is not hidden behind a cached empty HTML file (e.g. WP Rocket).
         if (version_compare($installed_version, '1.3.104', '<')) {
+            $this->purge_page_caches_after_content_fix();
+        }
+
+        // 1.3.105: the 1.3.104 theme-fallback buffer could return null / fatal
+        // and cache a blank HTML page. Purge so those cached empties are rebuilt.
+        if (version_compare($installed_version, '1.3.105', '<')) {
             $this->purge_page_caches_after_content_fix();
         }
 

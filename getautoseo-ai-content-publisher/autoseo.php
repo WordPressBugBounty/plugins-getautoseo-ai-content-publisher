@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.105
+ * Version: 1.3.106
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.105');
+define('AUTOSEO_VERSION', '1.3.106');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -510,7 +510,8 @@ class AutoSEO_Plugin {
         }
 
         // Only load AutoSEO specific scripts if shortcode is present or on specific pages
-        if (!has_shortcode($post->post_content ?? '', 'getautoseo') &&
+        $post_content = ($post && isset($post->post_content)) ? $post->post_content : '';
+        if (!has_shortcode($post_content, 'getautoseo') &&
             !is_page('autoseo-dashboard')) {
             return;
         }
@@ -669,6 +670,23 @@ class AutoSEO_Plugin {
         }
 
         ob_start(array($this, 'inject_autoseo_content_into_empty_theme'));
+
+        // Flush the buffer at shutdown priority 0 — before other shutdown handlers
+        // run. Relying on PHP's implicit buffer flush during shutdown can trigger
+        // HTTP 500 on servers that escalate late PHP warnings (PCRE JIT stack, etc.)
+        // to error status codes.
+        add_action('shutdown', array($this, 'flush_theme_fallback_buffer'), 0);
+    }
+
+    /**
+     * Explicitly end+flush the theme-fallback output buffer before PHP shutdown
+     * handlers fire. This prevents late PCRE/memory warnings inside the callback
+     * from being interpreted as a request failure by the web server.
+     */
+    public function flush_theme_fallback_buffer() {
+        if (ob_get_level() > 0) {
+            ob_end_flush();
+        }
     }
 
     /**
@@ -847,7 +865,10 @@ class AutoSEO_Plugin {
         }
 
         $plain = html_entity_decode(wp_strip_all_tags($text), ENT_QUOTES, 'UTF-8');
-        $plain = preg_replace('/\s+/u', ' ', $plain);
+
+        // Avoid /u (Unicode) flag — on large pages (100 KB+) it exhausts the PCRE
+        // JIT stack, emitting a PHP Warning that some servers escalate to HTTP 500.
+        $plain = preg_replace('/\s+/', ' ', $plain);
         if (!is_string($plain)) {
             return '';
         }
@@ -4291,7 +4312,7 @@ class AutoSEO_Plugin {
      * Normalize YouTube iframe markup to a full-width responsive embed.
      */
     public function normalize_youtube_embed_markup($content) {
-        if (stripos($content, 'youtube') === false) {
+        if (!is_string($content) || stripos($content, 'youtube') === false) {
             return $content;
         }
 
@@ -4304,7 +4325,7 @@ class AutoSEO_Plugin {
                 return $placeholder;
             },
             $content
-        );
+        ) ?? $content;
 
         $content = preg_replace_callback(
             '/<iframe\b[^>]*src=["\']https?:\/\/(?:www\.)?youtube(?:-nocookie)?\.com\/embed\/[a-zA-Z0-9_-]{11}[^"\']*["\'][^>]*>.*?<\/iframe>/is',
@@ -4312,7 +4333,7 @@ class AutoSEO_Plugin {
                 return $this->build_responsive_youtube_embed_from_html($matches[0]);
             },
             $content
-        );
+        ) ?? $content;
 
         return strtr($content, $blocks);
     }
@@ -4390,7 +4411,7 @@ class AutoSEO_Plugin {
      * This filter ensures the wrapper is always present and removes stray closing divs.
      */
     public function fix_key_takeaways_structure($content) {
-        if (!is_singular('post') || !in_the_loop() || !is_main_query()) {
+        if (!is_string($content) || !is_singular('post') || !in_the_loop() || !is_main_query()) {
             return $content;
         }
 
@@ -4457,7 +4478,7 @@ class AutoSEO_Plugin {
      * visible paragraph text on the published article.
      */
     public function convert_markdown_headings_in_content($content) {
-        if (!is_singular('post') || !in_the_loop() || !is_main_query()) {
+        if (!is_string($content) || !is_singular('post') || !in_the_loop() || !is_main_query()) {
             return $content;
         }
 
@@ -4508,7 +4529,7 @@ class AutoSEO_Plugin {
      * This filter re-adds them at render time so TOC anchor links work.
      */
     public function add_heading_anchor_ids($content) {
-        if (!is_singular('post') || !in_the_loop() || !is_main_query()) {
+        if (!is_string($content) || !is_singular('post') || !in_the_loop() || !is_main_query()) {
             return $content;
         }
 
@@ -4519,7 +4540,7 @@ class AutoSEO_Plugin {
 
         // Strip empty anchor tags produced when AI-generated markdown []()
         // links survive into HTML (e.g. <a href=""></a>).
-        $content = preg_replace('/<a\s+href=["\'][\s]*["\']>\s*<\/a>/i', '', $content);
+        $content = preg_replace('/<a\s+href=["\'][\s]*["\']>\s*<\/a>/i', '', $content) ?? $content;
 
         return preg_replace_callback(
             '/<h2(?![^>]*\bid=)([^>]*)>(.*?)<\/h2>/is',
@@ -4535,7 +4556,7 @@ class AutoSEO_Plugin {
                 return '<h2 id="' . esc_attr($slug) . '"' . $attributes . '>' . $headingHtml . '</h2>';
             },
             $content
-        );
+        ) ?? $content;
     }
 
     /**
@@ -4545,7 +4566,7 @@ class AutoSEO_Plugin {
      * Some themes (e.g. Infinite WP) render that markup as vertical text.
      */
     public function normalize_autoseo_heading_anchors($content) {
-        if (!is_singular('post') || !in_the_loop() || !is_main_query()) {
+        if (!is_string($content) || !is_singular('post') || !in_the_loop() || !is_main_query()) {
             return $content;
         }
 
@@ -4558,13 +4579,13 @@ class AutoSEO_Plugin {
             '/<a\b[^>]*\bclass=(["\'])autoseo-heading-anchor\1[^>]*>(.*?)<\/a>/is',
             '$2',
             $content
-        );
+        ) ?? $content;
 
         $content = preg_replace(
             '/<a\b[^>]*\bname=(["\'])[^"\']*\1[^>]*>\s*<\/a>/is',
             '',
             $content
-        );
+        ) ?? $content;
 
         return $content;
     }
@@ -4595,7 +4616,7 @@ class AutoSEO_Plugin {
         // Only run on single post pages, inside the main loop
         // The in_the_loop() check prevents themes (e.g. Avada) from triggering
         // this filter in nav menus, related posts, footers, etc.
-        if (!is_singular('post') || !in_the_loop() || !is_main_query()) {
+        if (!is_string($content) || !is_singular('post') || !in_the_loop() || !is_main_query()) {
             return $content;
         }
 

@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.105
+Stable tag: 1.3.106
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,11 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.106 =
+* FIXED: Plugin could cause HTTP 500 status on public blog post pages while the page HTML still rendered. The output-buffer callback ran a Unicode regex on the full page HTML, which exhausted the PCRE JIT stack on large pages and emitted a PHP Warning that certain servers (LiteSpeed, strict PHP-FPM configs) escalated to a 500 response.
+* FIXED: All `the_content` filter callbacks now guard against null propagation — a PCRE failure in one filter no longer cascades null through subsequent filters.
+* FIXED: The theme-fallback output buffer now flushes explicitly before PHP shutdown, preventing late warnings from affecting the HTTP status code.
 
 = 1.3.105 =
 * FIXED: Some live articles opened as a blank white page (no header, no menus, no article) after 1.3.104. The theme-fallback repair now leaves the page alone when the article is already visible, and it can no longer wipe the HTML if a regex or cache plugin fails.

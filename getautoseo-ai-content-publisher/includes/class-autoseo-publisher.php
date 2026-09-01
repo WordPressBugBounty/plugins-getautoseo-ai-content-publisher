@@ -1145,9 +1145,30 @@ class AutoSEO_Publisher {
             }
         }
 
-        // IMPORTANT: Never update the slug on existing posts.
-        // Changing slugs breaks published URLs, kills SEO value, and causes 404s
-        // for anyone who bookmarked or linked to the original URL.
+        // Slug policy: keep the existing slug for normal content updates to
+        // preserve SEO equity and avoid breaking bookmarked links. However, when
+        // a replacement article (rewrite with new topic) takes over this post,
+        // the old slug no longer reflects the content and must be updated.
+        // $skip_webhook === false means the API flagged needs_url_confirmation,
+        // i.e. this article has never had a confirmed published URL — it is a
+        // new version claiming an existing post via previous_article_ids or
+        // title-based duplicate prevention.
+        if (!$skip_webhook && !empty($article->slug)) {
+            $new_slug = sanitize_title($article->slug);
+            $new_slug = strtolower((string) preg_replace('/[^a-z0-9]+/', '-', $new_slug));
+            $new_slug = trim($new_slug, '-');
+
+            if ($new_slug !== '' && $new_slug !== $existing_post->post_name) {
+                $post_data['post_name'] = $new_slug;
+                $this->log_debug(sprintf(
+                    'Updating slug for post %d: "%s" → "%s" (replacement article %s needs URL confirmation)',
+                    $existing_post->ID,
+                    $existing_post->post_name,
+                    $new_slug,
+                    $article->autoseo_id
+                ));
+            }
+        }
 
         // If the user has edited this post with a page builder (Elementor, Divi,
         // etc.) or manually changed the WordPress body since we last published

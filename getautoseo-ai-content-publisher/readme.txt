@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.107
+Stable tag: 1.3.110
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,12 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.109 =
+* FIXED: German letters in post URLs (ä ö ü Ä Ö Ü ß) are now converted to ae/oe/ue/ss instead of being dropped when WordPress builds the permalink.
+
+= 1.3.108 =
+* FIXED: On some themes (DesignThemes LMS "load more" / first-post-div + all-post-div), the live article repeated the same paragraphs and images many times while the AutoSEO Content Calendar stayed correct. The theme clones the full WordPress post body into extra page wrappers. The plugin now removes those duplicate wrappers on the public page. It does not change stored article content.
 
 = 1.3.106 =
 * FIXED: Plugin could cause HTTP 500 status on public blog post pages while the page HTML still rendered. The output-buffer callback ran a Unicode regex on the full page HTML, which exhausted the PCRE JIT stack on large pages and emitted a PHP Warning that certain servers (LiteSpeed, strict PHP-FPM configs) escalated to a 500 response.

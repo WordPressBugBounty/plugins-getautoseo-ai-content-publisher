@@ -1,12 +1,74 @@
 /**
  * AutoSEO WordPress Plugin - Frontend JavaScript
- * Version: 1.2.9
+ * Version: 1.3.108
  */
 
 (function($) {
     'use strict';
 
+    function normalizeCopyText(html) {
+        var text = $('<div>').html(html).text() || '';
+        return text.replace(/\s+/g, ' ').trim();
+    }
+
+    function isDuplicateCopy(htmlA, htmlB) {
+        var a = normalizeCopyText(htmlA);
+        var b = normalizeCopyText(htmlB);
+        if (a.length < 80 || b.length < 80) {
+            return false;
+        }
+        if (a === b) {
+            return true;
+        }
+        if (a.length < 160 || b.length < 160) {
+            return false;
+        }
+        var prefixA = a.substring(0, 160).toLowerCase();
+        var prefixB = b.substring(0, 160).toLowerCase();
+        if (b.toLowerCase().indexOf(prefixA) !== 0 && a.toLowerCase().indexOf(prefixB) !== 0) {
+            return false;
+        }
+        return Math.min(a.length, b.length) / Math.max(a.length, b.length) >= 0.85;
+    }
+
+    /**
+     * DesignThemes LMS (and similar themes) can print the full article in
+     * .first-post-div and again in each .all-post-div page. The server-side
+     * output buffer removes those copies; this is a fallback when that
+     * buffer does not run (cached HTML from before the plugin update).
+     */
+    function collapseRepeatedThemeCopies() {
+        var $first = $('.autoseo .first-post-div').first();
+        var $copies = $('.autoseo .all-post-div');
+        if (!$copies.length) {
+            return;
+        }
+
+        if ($first.length && $copies.length) {
+            var firstHtml = $first.html() || '';
+            $copies.each(function() {
+                if (isDuplicateCopy(firstHtml, $(this).html() || '')) {
+                    $(this).remove();
+                }
+            });
+            return;
+        }
+
+        var $remaining = $('.autoseo .all-post-div');
+        if ($remaining.length < 2) {
+            return;
+        }
+        var keepHtml = $remaining.first().html() || '';
+        $remaining.slice(1).each(function() {
+            if (isDuplicateCopy(keepHtml, $(this).html() || '')) {
+                $(this).remove();
+            }
+        });
+    }
+
     $(document).ready(function() {
+        collapseRepeatedThemeCopies();
+
         // Lazy load infographic images if needed
         $('.autoseo-infographic-container img').each(function() {
             const $img = $(this);

@@ -428,13 +428,7 @@ class AutoSEO_Publisher {
         // Traditional Chinese) so the permalink is readable instead of a URL-encoded title.
         // Keep WordPress post names portable: lowercase ASCII letters, digits, and hyphens only.
         $raw_slug = !empty($article->slug) ? $article->slug : $article->title;
-        $post_slug = sanitize_title($raw_slug);
-        $post_slug = strtolower((string) preg_replace('/[^a-z0-9]+/', '-', $post_slug));
-        $post_slug = trim($post_slug, '-');
-
-        if ($post_slug === '') {
-            $post_slug = 'article-' . absint($article->autoseo_id);
-        }
+        $post_slug = $this->sanitize_post_slug($raw_slug, 'article-' . absint($article->autoseo_id));
 
         $post_data = array(
             'post_title' => $article->title,
@@ -1154,9 +1148,7 @@ class AutoSEO_Publisher {
         // new version claiming an existing post via previous_article_ids or
         // title-based duplicate prevention.
         if (!$skip_webhook && !empty($article->slug)) {
-            $new_slug = sanitize_title($article->slug);
-            $new_slug = strtolower((string) preg_replace('/[^a-z0-9]+/', '-', $new_slug));
-            $new_slug = trim($new_slug, '-');
+            $new_slug = $this->sanitize_post_slug($article->slug);
 
             if ($new_slug !== '' && $new_slug !== $existing_post->post_name) {
                 $post_data['post_name'] = $new_slug;
@@ -2919,6 +2911,49 @@ class AutoSEO_Publisher {
         $post = !empty($query->posts) ? $query->posts[0] : null;
         wp_reset_postdata();
         return $post;
+    }
+
+    /**
+     * Build a portable ASCII post slug.
+     *
+     * Expand German umlauts and ß to ae/oe/ue/ss before sanitize_title() and
+     * the ASCII-only strip. Without this, a non-de_DE locale turns "Qualität"
+     * into "qualitat" or drops ä and leaves "qualitt".
+     *
+     * @param string $raw_slug Title or supplied slug.
+     * @param string $fallback Used when the sanitized slug is empty.
+     * @return string
+     */
+    private function sanitize_post_slug($raw_slug, $fallback = '') {
+        $text = is_string($raw_slug) ? $raw_slug : '';
+
+        if (class_exists('Normalizer')) {
+            $normalized = Normalizer::normalize($text, Normalizer::FORM_C);
+            if (is_string($normalized) && $normalized !== '') {
+                $text = $normalized;
+            }
+        }
+
+        $text = strtr($text, array(
+            'ä' => 'ae',
+            'ö' => 'oe',
+            'ü' => 'ue',
+            'Ä' => 'ae',
+            'Ö' => 'oe',
+            'Ü' => 'ue',
+            'ß' => 'ss',
+            'ẞ' => 'ss',
+        ));
+
+        $post_slug = sanitize_title($text);
+        $post_slug = strtolower((string) preg_replace('/[^a-z0-9]+/', '-', $post_slug));
+        $post_slug = trim($post_slug, '-');
+
+        if ($post_slug === '') {
+            return $fallback;
+        }
+
+        return $post_slug;
     }
 }
 

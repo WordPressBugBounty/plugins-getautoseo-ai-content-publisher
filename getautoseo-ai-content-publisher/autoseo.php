@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.107
+ * Version: 1.3.110
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.107');
+define('AUTOSEO_VERSION', '1.3.110');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -206,6 +206,7 @@ class AutoSEO_Plugin {
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-publisher.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-scheduler.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-notifications.php';
+        require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-rendered-content.php';
 
         // Initialize classes
         new AutoSEO_Admin();
@@ -509,10 +510,12 @@ class AutoSEO_Plugin {
             );
         }
 
-        // Only load AutoSEO specific scripts if shortcode is present or on specific pages
         $post_content = ($post && isset($post->post_content)) ? $post->post_content : '';
-        if (!has_shortcode($post_content, 'getautoseo') &&
-            !is_page('autoseo-dashboard')) {
+        $needs_frontend_js = $is_autoseo_article
+            || has_shortcode($post_content, 'getautoseo')
+            || is_page('autoseo-dashboard');
+
+        if (!$needs_frontend_js) {
             return;
         }
 
@@ -705,16 +708,23 @@ class AutoSEO_Plugin {
                 return $original_html;
             }
 
+            // Some themes clone the_content() into "load more" pages. Collapse
+            // those copies before the empty-theme injection check, so crawlers
+            // and visitors see one article. Stored post_content is not changed.
+            $html = AutoSEO_Rendered_Content::collapse_repeated_copies($original_html);
+            if (!is_string($html) || $html === '') {
+                $html = $original_html;
+            }
+
             $post = get_queried_object();
             if (!$post || empty($post->post_content)) {
-                return $original_html;
+                return $html;
             }
 
-            if ($this->autoseo_content_appears_in_html($original_html, $post->post_content)) {
-                return $original_html;
+            if ($this->autoseo_content_appears_in_html($html, $post->post_content)) {
+                return $html;
             }
 
-            $html = $original_html;
             $title = get_the_title($post);
             if ($title !== '' && strpos($html, '</h1>') !== false) {
                 $replaced = $this->safe_preg_replace_callback(
@@ -2613,8 +2623,8 @@ class AutoSEO_Plugin {
      * Register REST API routes
      */
     public function register_rest_routes() {
-        // Handshake endpoint for keyless verification (PUBLIC - no auth required)
-        // This is called by the AutoSEO backend to verify the plugin is installed
+        // Public callback for keyless verification. It only responds when the
+        // backend returns a one-time token created by this plugin installation.
         register_rest_route('autoseo/v1', '/handshake', array(
             'methods' => 'GET',
             'callback' => array($this, 'rest_handshake_callback'),
@@ -2932,7 +2942,7 @@ class AutoSEO_Plugin {
      * REST API handler for handshake verification callback
      * 
      * This endpoint is called by the AutoSEO backend to verify the plugin is installed.
-     * It's a PUBLIC endpoint - the security is that only the real WordPress site can respond.
+     * It is public, but requires a one-time token created by this installation.
      * 
      * @param WP_REST_Request $request
      * @return WP_REST_Response
@@ -2940,6 +2950,7 @@ class AutoSEO_Plugin {
     public function rest_handshake_callback($request) {
         // Get the challenge token from the request header
         $challenge_token = $request->get_header('X-AutoSEO-Challenge');
+        $installation_token = $request->get_header('X-AutoSEO-Installation-Token');
         $site_id = $request->get_header('X-AutoSEO-Site-ID');
         
         $this->log_debug("Handshake callback received from AutoSEO backend");
@@ -2964,11 +2975,31 @@ class AutoSEO_Plugin {
             ), 400);
         }
 
+        $installation_token_key = 'autoseo_handshake_installation_token_' . hash('sha256', $installation_token);
+        $installation_token_exists = get_transient($installation_token_key);
+        if (
+            empty($installation_token)
+            || !is_string($installation_token_exists)
+            || !hash_equals('1', $installation_token_exists)
+        ) {
+            $this->log_debug("Handshake rejected - invalid installation token");
+            return new WP_REST_Response(array(
+                'success' => false,
+                'message' => 'Invalid or expired installation token',
+            ), 403);
+        }
+
+        // Consume the token before returning the proof. A token can complete
+        // only one handshake and never leaves this site except in its outbound
+        // TLS request to AutoSEO.
+        delete_transient($installation_token_key);
+
         // Return the challenge token to prove we received it
         // Also include plugin version and site URL for verification
         $response = array(
             'success' => true,
             'challenge_response' => $challenge_token,
+            'installation_token_proof' => hash_hmac('sha256', $challenge_token, $installation_token),
             'plugin_version' => AUTOSEO_VERSION,
             'site_url' => home_url(),
             'wordpress_version' => get_bloginfo('version'),
@@ -3002,6 +3033,13 @@ class AutoSEO_Plugin {
         }
 
         $handshake_url = AUTOSEO_API_BASE_URL . '/plugin/initiate-handshake';
+        $installation_token = wp_generate_password(64, false, false);
+        $installation_token_key = 'autoseo_handshake_installation_token_' . hash('sha256', $installation_token);
+        set_transient(
+            $installation_token_key,
+            '1',
+            10 * MINUTE_IN_SECONDS
+        );
 
         $response = wp_remote_post($handshake_url, array(
             'headers' => array(
@@ -3010,21 +3048,28 @@ class AutoSEO_Plugin {
             ),
             'body' => wp_json_encode(array(
                 'site_url' => $site_url,
+                'installation_token' => $installation_token,
             )),
             'timeout' => 30, // Longer timeout - backend needs to callback to us
         ));
 
         if (is_wp_error($response)) {
+            delete_transient($installation_token_key);
             $this->log_debug("Auto-verification failed - request error: " . $response->get_error_message());
             return $response;
         }
+
+        delete_transient($installation_token_key);
 
         $status_code = wp_remote_retrieve_response_code($response);
         $body = wp_remote_retrieve_body($response);
         $data = json_decode($body, true);
 
         $this->log_debug("Auto-verification response - status: " . $status_code);
-        $this->log_debug("Auto-verification response body: " . substr($body, 0, 500));
+        $this->log_debug(
+            "Auto-verification response parsed - success: "
+            . (!empty($data['success']) ? 'yes' : 'no')
+        );
 
         if ($status_code === 200 && isset($data['success']) && $data['success'] === true) {
             // Success! We received the API key

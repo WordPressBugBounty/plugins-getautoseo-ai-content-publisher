@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.110
+Stable tag: 1.3.111
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.111 =
+* FIXED: The author line now follows the site language. A German site shows "Artikel von" in the author box and "von:" on blog lists. It no longer stays in English as "Article by" or "by:".
 
 = 1.3.109 =
 * FIXED: German letters in post URLs (ä ö ü Ä Ö Ü ß) are now converted to ae/oe/ue/ss instead of being dropped when WordPress builds the permalink.

@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.110
+ * Version: 1.3.111
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.110');
+define('AUTOSEO_VERSION', '1.3.111');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -160,6 +160,11 @@ class AutoSEO_Plugin {
 
         // Inject infographic image into post content
         add_filter('the_content', array($this, 'inject_infographic_image_into_content'), 10);
+
+        // Replace the English author line on sites whose language is not English.
+        // This updates pages that were synced before the label followed the site language.
+        add_filter('the_content', array($this, 'localize_author_box_label_in_content'), 11);
+        add_action('template_redirect', array($this, 'maybe_localize_archive_author_bylines'), 0);
 
         // Fix Key Takeaways HTML structure (runs earliest to fix stray </div> before other filters)
         add_filter('the_content', array($this, 'fix_key_takeaways_structure'), 3);
@@ -648,6 +653,136 @@ class AutoSEO_Plugin {
     }
 
     /**
+     * Fixed author-box phrases. Keep these in sync with Article::authorBoxLabels()
+     * in the Laravel app. "theme" is the short byline some themes print as "by:".
+     *
+     * @return array<string, array{box: string, theme: string}>
+     */
+    private function author_byline_phrases() {
+        return array(
+            'da' => array('box' => 'Artikel af', 'theme' => 'af:'),
+            'de' => array('box' => 'Artikel von', 'theme' => 'von:'),
+            'es' => array('box' => 'Artículo por', 'theme' => 'por:'),
+            'fr' => array('box' => 'Article par', 'theme' => 'par:'),
+            'ja' => array('box' => '記事作成者', 'theme' => ''),
+            'nl' => array('box' => 'Artikel door', 'theme' => 'door:'),
+            'pl' => array('box' => 'Artykuł autorstwa', 'theme' => ''),
+            'sv' => array('box' => 'Artikel av', 'theme' => 'av:'),
+        );
+    }
+
+    /**
+     * Phrases for the current WordPress locale, or null when the locale stays English.
+     *
+     * @return array{box: string, theme: string}|null
+     */
+    private function localized_byline_strings() {
+        $locale = function_exists('determine_locale') ? determine_locale() : get_locale();
+        $code = strtolower(substr(str_replace('_', '-', (string) $locale), 0, 2));
+        $phrases = $this->author_byline_phrases();
+
+        return isset($phrases[$code]) ? $phrases[$code] : null;
+    }
+
+    /**
+     * Replace the English author line in post HTML for the current site language.
+     *
+     * @param mixed $content
+     * @return mixed
+     */
+    public function localize_author_box_label_in_content($content) {
+        if (!is_string($content) || $content === '') {
+            return $content;
+        }
+
+        return $this->localize_public_author_bylines($content);
+    }
+
+    /**
+     * Blog archive pages print "by:" outside the post body. Buffer those pages
+     * and replace that theme text. Singular AutoSEO posts use the existing
+     * theme-fallback buffer instead, so the two buffers do not nest.
+     */
+    public function maybe_localize_archive_author_bylines() {
+        if (is_admin() || wp_doing_ajax() || wp_doing_cron() || is_feed() || is_singular()) {
+            return;
+        }
+        if (defined('REST_REQUEST') && REST_REQUEST) {
+            return;
+        }
+        if (!is_home() && !is_archive() && !is_search()) {
+            return;
+        }
+        if ($this->localized_byline_strings() === null) {
+            return;
+        }
+
+        ob_start(array($this, 'localize_public_author_bylines'));
+        add_action('shutdown', array($this, 'flush_author_byline_buffer'), 0);
+    }
+
+    /**
+     * Flush the archive byline buffer before PHP shutdown.
+     */
+    public function flush_author_byline_buffer() {
+        if (ob_get_level() > 0) {
+            ob_end_flush();
+        }
+    }
+
+    /**
+     * Run the empty-theme repair, then localize author lines in the full page.
+     *
+     * @param mixed $html
+     * @return string
+     */
+    public function finish_theme_fallback_html($html) {
+        $html = $this->inject_autoseo_content_into_empty_theme($html);
+
+        return $this->localize_public_author_bylines(is_string($html) ? $html : '');
+    }
+
+    /**
+     * Replace "Article by" in the author box and "by:" in theme blog cards.
+     * Always returns a string. A null return from an output-buffer callback
+     * blanks the page.
+     *
+     * @param mixed $html
+     * @return string
+     */
+    public function localize_public_author_bylines($html) {
+        if (!is_string($html) || $html === '') {
+            return is_string($html) ? $html : '';
+        }
+
+        $strings = $this->localized_byline_strings();
+        if ($strings === null) {
+            return $html;
+        }
+
+        if ($strings['box'] !== '' && $strings['box'] !== 'Article by') {
+            $replaced = preg_replace(
+                '/>\s*Article by\s*<\/p>/i',
+                '>' . $strings['box'] . '</p>',
+                $html
+            );
+            if (is_string($replaced)) {
+                $html = $replaced;
+            }
+        }
+
+        if ($strings['theme'] !== '') {
+            $html = str_replace(
+                '<span class="meta">by:</span>',
+                '<span class="meta">' . $strings['theme'] . '</span>',
+                $html
+            );
+        }
+
+        return $html;
+    }
+
+    /**
      * Start an output buffer so we can inject the article when the theme
      * renders an empty shell (ACF bricks, custom title fields, etc.).
      */
@@ -672,7 +807,7 @@ class AutoSEO_Plugin {
             return;
         }
 
-        ob_start(array($this, 'inject_autoseo_content_into_empty_theme'));
+        ob_start(array($this, 'finish_theme_fallback_html'));
 
         // Flush the buffer at shutdown priority 0 — before other shutdown handlers
         // run. Relying on PHP's implicit buffer flush during shutdown can trigger

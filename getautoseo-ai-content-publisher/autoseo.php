@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.111
+ * Version: 1.3.112
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.111');
+define('AUTOSEO_VERSION', '1.3.112');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -212,6 +212,7 @@ class AutoSEO_Plugin {
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-scheduler.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-notifications.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-rendered-content.php';
+        require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-sitemap.php';
 
         // Initialize classes
         new AutoSEO_Admin();
@@ -219,6 +220,9 @@ class AutoSEO_Plugin {
         new AutoSEO_Publisher();
         new AutoSEO_Scheduler();
         new AutoSEO_Notifications();
+
+        // List a sitemap in robots.txt (and serve one when the site has none)
+        (new AutoSEO_Sitemap())->register_hooks();
     }
 
     /**
@@ -1828,6 +1832,9 @@ class AutoSEO_Plugin {
         // Clear any scheduled events (both legacy and current hooks)
         wp_clear_scheduled_hook('autoseo_sync_articles');
         wp_clear_scheduled_hook('autoseo_auto_sync');
+
+        // Remove the sitemap block we added to a physical robots.txt
+        AutoSEO_Sitemap::deactivate_cleanup();
 
         // Flush rewrite rules
         flush_rewrite_rules();

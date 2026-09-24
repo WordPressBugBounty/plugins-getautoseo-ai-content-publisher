@@ -18,6 +18,8 @@ $autoseo_options_to_delete = array(
     'autoseo_author_id',
     'autoseo_last_sync',
     'autoseo_debug_mode',
+    'autoseo_sitemap_status',
+    'autoseo_sitemap_robots_enabled',
 );
 
 foreach ($autoseo_options_to_delete as $autoseo_option) {
@@ -42,6 +44,7 @@ foreach ($autoseo_tables_to_drop as $autoseo_table) {
 wp_clear_scheduled_hook('autoseo_sync_articles');
 wp_clear_scheduled_hook('autoseo_auto_sync');
 wp_clear_scheduled_hook('autoseo_publish_scheduled_article');
+wp_clear_scheduled_hook('autoseo_sitemap_check');
 
 // Clean up any transients
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Direct query required for uninstall cleanup

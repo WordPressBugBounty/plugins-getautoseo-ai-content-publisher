@@ -1,6 +1,6 @@
 /**
  * AutoSEO WordPress Plugin - Frontend JavaScript
- * Version: 1.3.108
+ * Version: 1.3.112
  */
 
 (function($) {

@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.112
+Stable tag: 1.3.113
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.113 =
+* FIXED: A public check of /wp-json/autoseo/v1/handshake no longer returns HTTP 403. SEO audit tools were reading that 403 as a blocked REST API and then reporting a false noindex. The real AutoSEO verification still requires its one-time token.
 
 = 1.3.112 =
 * NEW: Google can now always find your sitemap. If robots.txt does not list a sitemap, the plugin adds your existing one (Yoast, Rank Math, All in One SEO, SEOPress, The SEO Framework, Jetpack, Google XML Sitemaps, or the WordPress sitemap). If your site has no sitemap, the plugin makes one with all your public posts, pages and categories at /content-sitemap.xml and lists it. A robots.txt file on the server is changed only when it is writable, inside a marked block that is removed when you deactivate the plugin.

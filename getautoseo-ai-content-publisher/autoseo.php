@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.112
+ * Version: 1.3.113
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.112');
+define('AUTOSEO_VERSION', '1.3.113');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -2771,6 +2771,9 @@ class AutoSEO_Plugin {
             'methods' => 'GET',
             'callback' => array($this, 'rest_handshake_callback'),
             'permission_callback' => '__return_true', // Public endpoint
+            // Crawlers read the REST index. This route is a verification
+            // callback, not a public resource.
+            'show_in_index' => false,
         ));
 
         register_rest_route('autoseo/v1', '/force-republish', array(
@@ -3099,14 +3102,15 @@ class AutoSEO_Plugin {
         $this->log_debug("Challenge token: " . ($challenge_token ? substr($challenge_token, 0, 10) . '...' : 'none'));
         $this->log_debug("Site ID: " . ($site_id ?: 'none'));
 
-        // Verify the request is from AutoSEO backend (check User-Agent)
-        $user_agent = $request->get_header('User-Agent');
+        // SEO audit tools request every route they find. A 403 here makes them
+        // report the REST API as blocked, and they then report a false noindex.
+        // Only the AutoSEO callback carries this User-Agent.
+        $user_agent = (string) $request->get_header('User-Agent');
         if (strpos($user_agent, 'AutoSEO-Handshake') === false) {
-            $this->log_debug("Handshake rejected - invalid User-Agent: " . $user_agent);
             return new WP_REST_Response(array(
-                'success' => false,
-                'message' => 'Invalid request origin',
-            ), 403);
+                'success' => true,
+                'status' => 'ok',
+            ), 200);
         }
 
         if (empty($challenge_token)) {

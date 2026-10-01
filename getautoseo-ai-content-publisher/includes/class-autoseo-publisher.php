@@ -2159,6 +2159,178 @@ class AutoSEO_Publisher {
     }
 
     /**
+     * Save FAQ schema post meta without losing JSON unicode escapes.
+     *
+     * update_post_meta() calls wp_unslash(). json_encode() writes an apostrophe
+     * as \u2019. One unslash turns that into the letters u2019. wp_slash() adds
+     * the backslash back, so the stored value stays valid JSON.
+     *
+     * Accepts an array of {question, answer} items, or a JSON string of that array.
+     * Returns true only when the stored meta changed.
+     *
+     * @param int $post_id WordPress post ID
+     * @param mixed $faq_schema FAQ items or a JSON string
+     * @return bool
+     */
+    public static function save_faq_schema_meta($post_id, $faq_schema) {
+        $post_id = (int) $post_id;
+        if ($post_id <= 0) {
+            return false;
+        }
+
+        $normalized = self::normalize_faq_schema($faq_schema);
+        if (empty($normalized)) {
+            return false;
+        }
+
+        $json = wp_json_encode($normalized);
+        if (!is_string($json) || $json === '' || $json === '[]') {
+            return false;
+        }
+
+        $stored = get_post_meta($post_id, '_autoseo_faq_schema', true);
+        $stored_normalized = self::normalize_faq_schema($stored);
+        if (is_array($stored_normalized) && wp_json_encode($stored_normalized) === $json) {
+            return false;
+        }
+
+        $result = update_post_meta($post_id, '_autoseo_faq_schema', wp_slash($json));
+        return $result !== false;
+    }
+
+    /**
+     * Rewrite FAQ post meta from the local sync table.
+     *
+     * The sync table keeps the JSON from wp_json_encode(), including \u escapes.
+     * Post meta saved before the wp_slash() fix does not. This runs once on upgrade.
+     *
+     * @return int Number of posts whose meta changed
+     */
+    public static function repair_faq_schema_from_sync_table() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'autoseo_articles';
+
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $table_exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name));
+        if ($table_exists !== $table_name) {
+            return 0;
+        }
+
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $rows = $wpdb->get_results(
+            "SELECT post_id, faq_schema FROM `" . esc_sql($table_name) . "` WHERE post_id IS NOT NULL AND post_id > 0 AND faq_schema IS NOT NULL AND faq_schema != ''"
+        );
+
+        if (empty($rows)) {
+            return 0;
+        }
+
+        $repaired = 0;
+        foreach ($rows as $row) {
+            if (self::save_faq_schema_meta((int) $row->post_id, $row->faq_schema)) {
+                $repaired++;
+            }
+        }
+
+        return $repaired;
+    }
+
+    /**
+     * Reduce FAQ data to a list of question/answer strings.
+     *
+     * @param mixed $faq_schema Array of items, or a JSON string
+     * @return array|null
+     */
+    private static function normalize_faq_schema($faq_schema) {
+        if (is_string($faq_schema)) {
+            $decoded = json_decode($faq_schema, true);
+            if (!is_array($decoded)) {
+                return null;
+            }
+            $faq_schema = $decoded;
+        }
+
+        if (!is_array($faq_schema)) {
+            return null;
+        }
+
+        $normalized = array();
+        foreach ($faq_schema as $faq) {
+            if (!is_array($faq)) {
+                continue;
+            }
+            $question = isset($faq['question']) ? (string) $faq['question'] : '';
+            $answer = isset($faq['answer']) ? (string) $faq['answer'] : '';
+            if ($question === '' || $answer === '') {
+                continue;
+            }
+            $normalized[] = array(
+                'question' => $question,
+                'answer' => $answer,
+            );
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Turn a stripped JSON unicode escape back into the character.
+     *
+     * json_encode() writes U+2019 as \u2019. wp_unslash() removes the backslash
+     * and leaves the letters u2019 inside words, for example reportu2019s.
+     * Only sequences whose first hex digit is 0-9 are restored. That keeps
+     * tokens such as forum2019 unchanged (the letter after u is not a digit).
+     *
+     * @param string $text
+     * @return string
+     */
+    public static function restore_stripped_json_unicode($text) {
+        if (!is_string($text) || $text === '' || strpos($text, 'u') === false) {
+            return $text;
+        }
+
+        $restored = preg_replace_callback(
+            '/u([0-9][0-9a-fA-F]{3})/',
+            function ($matches) {
+                $codepoint = hexdec($matches[1]);
+                // json_encode() emits \u for non-ASCII characters. Skip ASCII
+                // and UTF-16 surrogate halves.
+                if ($codepoint < 0xA0 || ($codepoint >= 0xD800 && $codepoint <= 0xDFFF)) {
+                    return $matches[0];
+                }
+                return self::utf8_from_codepoint($codepoint);
+            },
+            $text
+        );
+
+        return is_string($restored) ? $restored : $text;
+    }
+
+    /**
+     * Encode one Unicode codepoint as UTF-8.
+     *
+     * @param int $codepoint
+     * @return string
+     */
+    private static function utf8_from_codepoint($codepoint) {
+        $codepoint = (int) $codepoint;
+        if ($codepoint < 0x80) {
+            return chr($codepoint);
+        }
+        if ($codepoint < 0x800) {
+            return chr(0xC0 | ($codepoint >> 6))
+                . chr(0x80 | ($codepoint & 0x3F));
+        }
+        if ($codepoint < 0x10000) {
+            return chr(0xE0 | ($codepoint >> 12))
+                . chr(0x80 | (($codepoint >> 6) & 0x3F))
+                . chr(0x80 | ($codepoint & 0x3F));
+        }
+        return '';
+    }
+
+    /**
      * Set SEO meta fields for a post
      * Handles both Yoast SEO and custom meta output
      * 
@@ -2174,9 +2346,12 @@ class AutoSEO_Publisher {
             update_post_meta($post_id, '_autoseo_meta_keywords', $article->meta_keywords);
         }
 
-        // Store FAQ schema for FAQPage JSON-LD output
+        // Store FAQ schema for FAQPage JSON-LD output.
+        // update_post_meta() runs wp_unslash(). A JSON string that contains \u2019
+        // loses the backslash and is saved as the letters u2019. save_faq_schema_meta()
+        // calls wp_slash() so the escape stays intact.
         if (!empty($article->faq_schema)) {
-            update_post_meta($post_id, '_autoseo_faq_schema', $article->faq_schema);
+            self::save_faq_schema_meta($post_id, $article->faq_schema);
         }
 
         // Populate every active SEO plugin's native fields. Some sites run
@@ -3122,12 +3297,16 @@ class AutoSEO_Meta_Output {
             if (empty($faq['question']) || empty($faq['answer'])) {
                 continue;
             }
+            // Older saves lost the backslash in \u2019. Repair the visible text
+            // until the stored meta is rewritten.
+            $question = AutoSEO_Publisher::restore_stripped_json_unicode((string) $faq['question']);
+            $answer = AutoSEO_Publisher::restore_stripped_json_unicode((string) $faq['answer']);
             $main_entity[] = array(
                 '@type' => 'Question',
-                'name' => $faq['question'],
+                'name' => $question,
                 'acceptedAnswer' => array(
                     '@type' => 'Answer',
-                    'text' => $faq['answer'],
+                    'text' => $answer,
                 ),
             );
         }

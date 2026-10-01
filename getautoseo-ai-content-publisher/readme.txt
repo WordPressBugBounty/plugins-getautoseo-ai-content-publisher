@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.113
+Stable tag: 1.3.114
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.114 =
+* FIXED: FAQ answers that Google reads now keep apostrophes and quotation marks. They no longer show the letters u2019 or u201c. When you update the plugin, articles that already have this error are corrected.
 
 = 1.3.113 =
 * FIXED: A public check of /wp-json/autoseo/v1/handshake no longer returns HTTP 403. SEO audit tools were reading that 403 as a blocked REST API and then reporting a false noindex. The real AutoSEO verification still requires its one-time token.

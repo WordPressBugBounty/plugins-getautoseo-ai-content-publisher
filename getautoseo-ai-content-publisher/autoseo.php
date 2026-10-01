@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.113
+ * Version: 1.3.114
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.113');
+define('AUTOSEO_VERSION', '1.3.114');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -1191,6 +1191,18 @@ class AutoSEO_Plugin {
         // 1.3.105: the 1.3.104 theme-fallback buffer could return null / fatal
         // and cache a blank HTML page. Purge so those cached empties are rebuilt.
         if (version_compare($installed_version, '1.3.105', '<')) {
+            $this->purge_page_caches_after_content_fix();
+        }
+
+        // 1.3.114: FAQ JSON-LD stored \u2019 as the letters u2019 because
+        // update_post_meta() strips one backslash. Rewrite post meta from the
+        // sync table, which still has the escapes, and drop cached HTML.
+        if (version_compare($installed_version, '1.3.114', '<')) {
+            $repaired = AutoSEO_Publisher::repair_faq_schema_from_sync_table();
+            if ($repaired > 0 && get_option('autoseo_debug_mode', '1') === '1') {
+                // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+                error_log('[AutoSEO] Repaired FAQ schema unicode escapes on ' . $repaired . ' posts');
+            }
             $this->purge_page_caches_after_content_fix();
         }
 

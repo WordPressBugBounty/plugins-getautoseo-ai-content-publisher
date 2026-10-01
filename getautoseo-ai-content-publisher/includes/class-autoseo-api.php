@@ -823,20 +823,16 @@ class AutoSEO_API {
                         }
 
                         // FAQ schema is stored separately from post content, so a post can
-                        // look up-to-date while its JSON-LD meta was never saved. Restore
-                        // the meta in place. Forcing a full content refresh instead turned
-                        // every affected post into a slow rewrite, and on slow hosts the
-                        // sync ran out of execution time before reaching new articles.
+                        // look up-to-date while its JSON-LD meta is missing or damaged.
+                        // WordPress strips one backslash on update_post_meta(), which turns
+                        // \u2019 into the letters u2019. Rewrite the meta from the API
+                        // payload when the stored text does not match. Do not force a full
+                        // content refresh: that turned every affected post into a slow
+                        // rewrite, and on slow hosts the sync ran out of time.
                         if (!empty($article['faq_schema'])) {
-                            $stored_faq_schema = get_post_meta($wp_post->ID, '_autoseo_faq_schema', true);
-                            $stored_faqs = is_string($stored_faq_schema)
-                                ? json_decode($stored_faq_schema, true)
-                                : $stored_faq_schema;
-
-                            if (empty($stored_faqs) || !is_array($stored_faqs)) {
-                                update_post_meta($wp_post->ID, '_autoseo_faq_schema', $article['faq_schema']);
+                            if (AutoSEO_Publisher::save_faq_schema_meta($wp_post->ID, $article['faq_schema'])) {
                                 $this->log_debug(sprintf(
-                                    'Restored missing FAQ schema meta for article "%s" without rewriting the post',
+                                    'Repaired FAQ schema meta for article "%s" without rewriting the post',
                                     $article['title']
                                 ));
                             }

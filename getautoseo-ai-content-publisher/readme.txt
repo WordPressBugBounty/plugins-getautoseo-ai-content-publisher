@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.114
+Stable tag: 1.3.115
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,10 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.115 =
+* FIXED: Updates from AutoSEO no longer overwrite an SEO title or meta description you set in Yoast, Rank Math, SEOPress, All in One SEO or SmartCrawl. AutoSEO only fills these fields when they are empty or still hold the value AutoSEO wrote.
+* FIXED: When you remove the FAQ section from an article, its FAQ structured data is removed from the page too.
 
 = 1.3.114 =
 * FIXED: FAQ answers that Google reads now keep apostrophes and quotation marks. They no longer show the letters u2019 or u201c. When you update the plugin, articles that already have this error are corrected.

@@ -15,6 +15,9 @@ class AutoSEO_Publisher {
     private static $batch_mode = false;
     private static $batched_webhooks = array();
 
+    private $seo_owned_titles = array();
+    private $seo_owned_descriptions = array();
+
     public static function start_batch() {
         if (self::$batch_mode) {
             return; // Already batching — don't reset collected webhooks
@@ -25,10 +28,6 @@ class AutoSEO_Publisher {
 
     public static function is_batching() {
         return self::$batch_mode;
-    }
-
-    public static function get_batched_webhooks() {
-        return self::$batched_webhooks;
     }
 
     public static function add_to_batch($webhook_data) {
@@ -1084,6 +1083,9 @@ class AutoSEO_Publisher {
             return new WP_Error('empty_content', __('Article content is empty', 'getautoseo-ai-content-publisher'));
         }
         
+        // The title AutoSEO last wrote to the SEO plugin fields, before this update.
+        $previous_seo_title = get_the_title($existing_post);
+
         // Get the author - keep existing author, with fallback to first admin
         $post_author = $existing_post->post_author;
         if (empty($post_author) || $post_author == 0) {
@@ -1506,7 +1508,7 @@ class AutoSEO_Publisher {
         }
 
         // Update meta description and keywords for SEO
-        $this->set_seo_meta_fields($existing_post->ID, $article);
+        $this->set_seo_meta_fields($existing_post->ID, $article, $previous_seo_title);
 
         // Update WordPress tags
         $this->set_wordpress_tags($existing_post->ID, $article);
@@ -1570,63 +1572,6 @@ class AutoSEO_Publisher {
             'post_id' => $existing_post->ID,
             'published_url' => $published_url,
             'action' => 'updated',
-        );
-    }
-
-    /**
-     * Publish all pending articles
-     * 
-     * @param int $limit Maximum number of articles to publish (default: 10)
-     * @return array
-     */
-    public function publish_pending_articles($limit = 10) {
-        global $wpdb;
-
-        $table_name = $wpdb->prefix . 'autoseo_articles';
-        
-        // Get pending articles
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table_name is safely constructed from $wpdb->prefix
-        $pending_articles = $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM {$table_name} WHERE status = %s ORDER BY synced_at ASC LIMIT %d",
-            'pending',
-            $limit
-        ));
-
-        $published_count = 0;
-        $errors = array();
-
-        self::start_batch();
-
-        try {
-            foreach ($pending_articles as $article) {
-                $result = $this->publish_article($article->id);
-                
-                if (!is_wp_error($result)) {
-                    $published_count++;
-                } else {
-                    $errors[] = sprintf(
-                        /* translators: 1: article title, 2: error message */
-                        __('Failed to publish "%1$s": %2$s', 'getautoseo-ai-content-publisher'),
-                        $article->title,
-                        $result->get_error_message()
-                    );
-                }
-            }
-        } finally {
-            $batched_webhooks = self::end_batch();
-        }
-
-        if (!empty($batched_webhooks)) {
-            $api = new AutoSEO_API();
-            $api->send_webhook('articles_batch_published', array(
-                'articles' => $batched_webhooks,
-            ));
-        }
-
-        return array(
-            'success' => true,
-            'published_count' => $published_count,
-            'errors' => $errors,
         );
     }
 
@@ -2337,7 +2282,16 @@ class AutoSEO_Publisher {
      * @param int $post_id WordPress post ID
      * @param object $article Article data from sync table
      */
-    private function set_seo_meta_fields($post_id, $article) {
+    private function set_seo_meta_fields($post_id, $article, $previous_seo_title = '') {
+        // On updates, SEO plugin title/description fields are only rewritten when
+        // they are empty or still hold a value AutoSEO wrote. A title or
+        // description the user typed into Yoast (etc.) in WordPress is kept.
+        $this->seo_owned_titles = array(get_the_title($post_id), (string) $previous_seo_title);
+        $this->seo_owned_descriptions = array(
+            (string) ($article->meta_description ?? ''),
+            (string) get_post_meta($post_id, '_autoseo_meta_description', true),
+        );
+
         // Always store in our custom meta fields (for fallback and custom output)
         if (!empty($article->meta_description)) {
             update_post_meta($post_id, '_autoseo_meta_description', $article->meta_description);
@@ -2350,8 +2304,12 @@ class AutoSEO_Publisher {
         // update_post_meta() runs wp_unslash(). A JSON string that contains \u2019
         // loses the backslash and is saved as the letters u2019. save_faq_schema_meta()
         // calls wp_slash() so the escape stays intact.
-        if (!empty($article->faq_schema)) {
+        // AutoSEO rebuilds the FAQ list from the article body. An empty list means
+        // the FAQ section is gone, so old schema must not stay on the page.
+        if (!empty($article->faq_schema) && !empty(self::normalize_faq_schema($article->faq_schema))) {
             self::save_faq_schema_meta($post_id, $article->faq_schema);
+        } elseif (property_exists($article, 'faq_schema')) {
+            delete_post_meta($post_id, '_autoseo_faq_schema');
         }
 
         // Populate every active SEO plugin's native fields. Some sites run
@@ -2415,27 +2373,47 @@ class AutoSEO_Publisher {
     }
 
     /**
-     * Get the primary keyphrase to store in SEO plugin fields.
+     * True when an SEO field is empty or still holds a value AutoSEO wrote.
      *
-     * @param object $article Article data from sync table
-     * @return string
+     * @param mixed $current Current stored value
+     * @param array $owned_values Values AutoSEO writes or wrote before
+     * @return bool
      */
-    private function get_focus_keyphrase($article) {
-        if (!empty($article->keywords)) {
-            $keywords_array = array_map('trim', explode(',', $article->keywords));
-            if (!empty($keywords_array[0])) {
-                return $keywords_array[0];
+    private function can_write_seo_value($current, $owned_values) {
+        $current = trim((string) $current);
+        if ($current === '') {
+            return true;
+        }
+        foreach ($owned_values as $owned) {
+            $owned = trim((string) $owned);
+            if ($owned !== '' && $current === $owned) {
+                return true;
             }
         }
+        return false;
+    }
 
-        if (!empty($article->meta_keywords)) {
-            $meta_keywords_array = array_map('trim', explode(',', $article->meta_keywords));
-            if (!empty($meta_keywords_array[0])) {
-                return $meta_keywords_array[0];
-            }
+    /**
+     * Write an SEO title/description post meta unless the user set it in WordPress.
+     *
+     * @param int $post_id WordPress post ID
+     * @param string $meta_key Post meta key
+     * @param string $value New value
+     * @param array $owned_values Values AutoSEO writes or wrote before
+     */
+    private function write_seo_meta($post_id, $meta_key, $value, $owned_values) {
+        if ($value === null || $value === '') {
+            return;
         }
-
-        return '';
+        if (!$this->can_write_seo_value(get_post_meta($post_id, $meta_key, true), $owned_values)) {
+            $this->log_debug(sprintf(
+                'Kept %s for post %d: value was set in WordPress',
+                $meta_key,
+                $post_id
+            ));
+            return;
+        }
+        update_post_meta($post_id, $meta_key, $value);
     }
 
     /**
@@ -2456,14 +2434,8 @@ class AutoSEO_Publisher {
      * @param object $article Article data from sync table
      */
     private function set_yoast_meta($post_id, $article) {
-        $title = get_the_title($post_id);
-        if (!empty($title)) {
-            update_post_meta($post_id, '_yoast_wpseo_title', $title);
-        }
-
-        if (!empty($article->meta_description)) {
-            update_post_meta($post_id, '_yoast_wpseo_metadesc', $article->meta_description);
-        }
+        $this->write_seo_meta($post_id, '_yoast_wpseo_title', get_the_title($post_id), $this->seo_owned_titles);
+        $this->write_seo_meta($post_id, '_yoast_wpseo_metadesc', $article->meta_description ?? '', $this->seo_owned_descriptions);
 
         // Yoast stores focus keyword in _yoast_wpseo_focuskw
         // Use the article's primary keyword first, fall back to first meta keyword
@@ -2534,14 +2506,8 @@ class AutoSEO_Publisher {
      * @param object $article Article data from sync table
      */
     private function set_rank_math_meta($post_id, $article) {
-        $title = get_the_title($post_id);
-        if (!empty($title)) {
-            update_post_meta($post_id, 'rank_math_title', $title);
-        }
-
-        if (!empty($article->meta_description)) {
-            update_post_meta($post_id, 'rank_math_description', $article->meta_description);
-        }
+        $this->write_seo_meta($post_id, 'rank_math_title', get_the_title($post_id), $this->seo_owned_titles);
+        $this->write_seo_meta($post_id, 'rank_math_description', $article->meta_description ?? '', $this->seo_owned_descriptions);
 
         $focus_keyphrase = '';
         
@@ -2608,14 +2574,10 @@ class AutoSEO_Publisher {
      */
     private function set_seopress_meta($post_id, $article) {
         $title = get_the_title($post_id);
+        $description = $article->meta_description ?? '';
 
-        if (!empty($title)) {
-            update_post_meta($post_id, '_seopress_titles_title', $title);
-        }
-
-        if (!empty($article->meta_description)) {
-            update_post_meta($post_id, '_seopress_titles_desc', $article->meta_description);
-        }
+        $this->write_seo_meta($post_id, '_seopress_titles_title', $title, $this->seo_owned_titles);
+        $this->write_seo_meta($post_id, '_seopress_titles_desc', $description, $this->seo_owned_descriptions);
 
         $focus_keyphrase = '';
         if (!empty($article->keywords)) {
@@ -2641,14 +2603,10 @@ class AutoSEO_Publisher {
         }
 
         // Facebook Open Graph fields
-        if (!empty($title)) {
-            update_post_meta($post_id, '_seopress_social_fb_title', $title);
-            update_post_meta($post_id, '_seopress_social_twitter_title', $title);
-        }
-        if (!empty($article->meta_description)) {
-            update_post_meta($post_id, '_seopress_social_fb_desc', $article->meta_description);
-            update_post_meta($post_id, '_seopress_social_twitter_desc', $article->meta_description);
-        }
+        $this->write_seo_meta($post_id, '_seopress_social_fb_title', $title, $this->seo_owned_titles);
+        $this->write_seo_meta($post_id, '_seopress_social_twitter_title', $title, $this->seo_owned_titles);
+        $this->write_seo_meta($post_id, '_seopress_social_fb_desc', $description, $this->seo_owned_descriptions);
+        $this->write_seo_meta($post_id, '_seopress_social_twitter_desc', $description, $this->seo_owned_descriptions);
 
         $thumbnail_id = get_post_thumbnail_id($post_id);
         if ($thumbnail_id) {
@@ -2696,12 +2654,8 @@ class AutoSEO_Publisher {
         $title = get_the_title($post_id);
         $description = $article->meta_description ?? '';
 
-        if (!empty($title)) {
-            update_post_meta($post_id, '_aioseo_title', $title);
-        }
-        if (!empty($description)) {
-            update_post_meta($post_id, '_aioseo_description', $description);
-        }
+        $this->write_seo_meta($post_id, '_aioseo_title', $title, $this->seo_owned_titles);
+        $this->write_seo_meta($post_id, '_aioseo_description', $description, $this->seo_owned_descriptions);
         if (!empty($article->meta_keywords)) {
             update_post_meta($post_id, '_aioseo_keywords', $article->meta_keywords);
         }
@@ -2757,11 +2711,30 @@ class AutoSEO_Publisher {
             $formats[] = in_array($key, array('post_id', 'twitter_use_og'), true) ? '%d' : '%s';
         }
 
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $existing_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$table_name} WHERE post_id = %d LIMIT 1", $post_id));
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $existing_row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table_name} WHERE post_id = %d LIMIT 1", $post_id), ARRAY_A);
+        $existing_id = $existing_row ? $existing_row['id'] : null;
 
         if ($existing_id) {
             unset($data['post_id']);
+
+            $owned_by_field = array(
+                'title' => $this->seo_owned_titles,
+                'og_title' => $this->seo_owned_titles,
+                'twitter_title' => $this->seo_owned_titles,
+                'description' => $this->seo_owned_descriptions,
+                'og_description' => $this->seo_owned_descriptions,
+                'twitter_description' => $this->seo_owned_descriptions,
+            );
+            foreach ($owned_by_field as $field => $owned_values) {
+                if (!array_key_exists($field, $data)) {
+                    continue;
+                }
+                if ($data[$field] === '' || !$this->can_write_seo_value($existing_row[$field] ?? '', $owned_values)) {
+                    unset($data[$field]);
+                }
+            }
+
             $formats = array();
             foreach ($data as $key => $value) {
                 $formats[] = ($key === 'twitter_use_og') ? '%d' : '%s';
@@ -2820,19 +2793,15 @@ class AutoSEO_Publisher {
         $title = get_the_title($post_id);
         $description = $article->meta_description ?? '';
 
-        if (!empty($title)) {
-            update_post_meta($post_id, '_wds_title', $title);
-        }
-        if (!empty($description)) {
-            update_post_meta($post_id, '_wds_metadesc', $description);
-        }
+        $this->write_seo_meta($post_id, '_wds_title', $title, $this->seo_owned_titles);
+        $this->write_seo_meta($post_id, '_wds_metadesc', $description, $this->seo_owned_descriptions);
 
         $opengraph = get_post_meta($post_id, '_wds_opengraph', true);
         $opengraph = is_array($opengraph) ? $opengraph : array();
-        if (!empty($title)) {
+        if (!empty($title) && $this->can_write_seo_value($opengraph['title'] ?? '', $this->seo_owned_titles)) {
             $opengraph['title'] = $title;
         }
-        if (!empty($description)) {
+        if (!empty($description) && $this->can_write_seo_value($opengraph['description'] ?? '', $this->seo_owned_descriptions)) {
             $opengraph['description'] = $description;
         }
 
@@ -2850,10 +2819,10 @@ class AutoSEO_Publisher {
 
         $twitter = get_post_meta($post_id, '_wds_twitter', true);
         $twitter = is_array($twitter) ? $twitter : array();
-        if (!empty($title)) {
+        if (!empty($title) && $this->can_write_seo_value($twitter['title'] ?? '', $this->seo_owned_titles)) {
             $twitter['title'] = $title;
         }
-        if (!empty($description)) {
+        if (!empty($description) && $this->can_write_seo_value($twitter['description'] ?? '', $this->seo_owned_descriptions)) {
             $twitter['description'] = $description;
         }
 
@@ -3328,5 +3297,4 @@ class AutoSEO_Meta_Output {
 
 // Initialize meta output handler
 add_action('init', array('AutoSEO_Meta_Output', 'init'));
-
 

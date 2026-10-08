@@ -836,6 +836,8 @@ class AutoSEO_API {
                                     $article['title']
                                 ));
                             }
+                        } elseif (array_key_exists('faq_schema', $article)) {
+                            delete_post_meta($wp_post->ID, '_autoseo_faq_schema');
                         }
 
                         $force_content_update = !empty($article['force_content_update']);

@@ -195,40 +195,6 @@ class AutoSEO_Scheduler {
     }
 
     /**
-     * Manually trigger sync (for testing or admin actions)
-     * 
-     * @param bool $force_resync Force resync all articles
-     * @return array|WP_Error
-     */
-    public function trigger_manual_sync($force_resync = false) {
-        $api = new AutoSEO_API();
-        return $api->sync_articles($force_resync);
-    }
-
-    /**
-     * Clear scheduled sync events
-     */
-    public function clear_scheduled_events() {
-        wp_clear_scheduled_hook('autoseo_auto_sync');
-        $this->log_debug('Scheduled sync events cleared');
-    }
-
-    /**
-     * Get next scheduled sync time
-     * 
-     * @return string|null
-     */
-    public function get_next_sync_time() {
-        $timestamp = wp_next_scheduled('autoseo_auto_sync');
-        
-        if (!$timestamp) {
-            return null;
-        }
-
-        return date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $timestamp);
-    }
-
-    /**
      * Store a sync connection error for display in the admin UI
      */
     public static function store_sync_error($error_message) {

@@ -14,6 +14,8 @@ class AutoSEO_Publisher {
 
     private static $batch_mode = false;
     private static $batched_webhooks = array();
+    private static $pending_tag_sync = array();
+    private static $tag_shutdown_registered = false;
 
     private $seo_owned_titles = array();
     private $seo_owned_descriptions = array();
@@ -727,6 +729,9 @@ class AutoSEO_Publisher {
         } finally {
             AutoSEO_Plugin::disallow_content_updates();
         }
+
+        // wp_update_post runs save_post. Another plugin can replace tags there.
+        self::reapply_stored_tags($post_id);
 
         $this->log_debug(sprintf('Baked infographic into post_content for post %d', $post_id));
     }
@@ -2068,39 +2073,124 @@ class AutoSEO_Publisher {
      * @param object $article Article data from sync table
      */
     private function set_wordpress_tags($post_id, $article) {
-        // Skip if no tags available
         if (empty($article->wordpress_tags)) {
             return;
         }
 
-        // Parse comma-separated tags
-        $tags_array = array_map('trim', explode(',', $article->wordpress_tags));
-        $tags_array = array_filter($tags_array); // Remove empty values
+        self::sync_tags_if_different($post_id, $article->wordpress_tags);
+    }
 
-        if (empty($tags_array)) {
+    /**
+     * Replace the post's tags when they are not the AutoSEO list.
+     *
+     * A later save in the same request (infographic bake, another plugin's
+     * save_post or shutdown hook) can replace these tags. The list is applied
+     * again at the end of the request.
+     *
+     * @param int $post_id WordPress post ID
+     * @param string $tag_string Comma-separated AutoSEO tags
+     */
+    public static function sync_tags_if_different($post_id, $tag_string) {
+        $post_id = (int) $post_id;
+        $desired = self::parse_tag_list($tag_string);
+        if ($post_id <= 0 || empty($desired)) {
             return;
         }
 
-        // Set the tags on the post (wp_set_post_tags will create tags if they don't exist)
-        $result = wp_set_post_tags($post_id, $tags_array, false); // false = replace existing tags
+        $current = wp_get_post_tags($post_id, array('fields' => 'names'));
+        if (!is_array($current)) {
+            $current = array();
+        }
+
+        if (self::tag_lists_match($current, $desired)) {
+            update_post_meta($post_id, '_autoseo_wordpress_tags', $tag_string);
+            return;
+        }
+
+        $result = wp_set_post_tags($post_id, $desired, false);
 
         if (is_wp_error($result)) {
-            $this->log_debug(sprintf(
-                'Failed to set tags for post %d: %s',
+            error_log(sprintf(
+                '[AutoSEO Publisher] Failed to set tags for post %d: %s',
                 $post_id,
                 $result->get_error_message()
             ));
-        } else {
-            $this->log_debug(sprintf(
-                'Set %d tags for post %d: %s',
-                count($tags_array),
-                $post_id,
-                implode(', ', $tags_array)
-            ));
+            return;
         }
 
-        // Store the original tags in post meta for reference
-        update_post_meta($post_id, '_autoseo_wordpress_tags', $article->wordpress_tags);
+        update_post_meta($post_id, '_autoseo_wordpress_tags', $tag_string);
+        self::$pending_tag_sync[$post_id] = $tag_string;
+
+        if (!self::$tag_shutdown_registered) {
+            self::$tag_shutdown_registered = true;
+            add_action('shutdown', array(__CLASS__, 'reapply_pending_tags'), PHP_INT_MAX);
+        }
+    }
+
+    /**
+     * Put AutoSEO tags back after other plugins run on shutdown.
+     */
+    public static function reapply_pending_tags() {
+        $pending = self::$pending_tag_sync;
+        self::$pending_tag_sync = array();
+
+        foreach ($pending as $post_id => $tag_string) {
+            $desired = self::parse_tag_list($tag_string);
+            if (empty($desired)) {
+                continue;
+            }
+            $current = wp_get_post_tags((int) $post_id, array('fields' => 'names'));
+            if (!is_array($current) || self::tag_lists_match($current, $desired)) {
+                continue;
+            }
+            wp_set_post_tags((int) $post_id, $desired, false);
+            update_post_meta((int) $post_id, '_autoseo_wordpress_tags', $tag_string);
+        }
+    }
+
+    /**
+     * Restore tags stored on the post after a later content save.
+     *
+     * @param int $post_id WordPress post ID
+     */
+    public static function reapply_stored_tags($post_id) {
+        $tag_string = get_post_meta((int) $post_id, '_autoseo_wordpress_tags', true);
+        if (!is_string($tag_string) || trim($tag_string) === '') {
+            return;
+        }
+        self::sync_tags_if_different((int) $post_id, $tag_string);
+    }
+
+    /**
+     * @param string $tag_string Comma-separated tags
+     * @return array
+     */
+    private static function parse_tag_list($tag_string) {
+        $tags = array_map('trim', explode(',', (string) $tag_string));
+        $tags = array_filter($tags, function ($tag) {
+            return $tag !== '';
+        });
+        return array_values($tags);
+    }
+
+    /**
+     * @param array $left Tag names
+     * @param array $right Tag names
+     * @return bool
+     */
+    private static function tag_lists_match($left, $right) {
+        $normalize = function ($tags) {
+            $tags = array_map(function ($tag) {
+                return strtolower(trim((string) $tag));
+            }, $tags);
+            $tags = array_values(array_filter($tags, function ($tag) {
+                return $tag !== '';
+            }));
+            sort($tags);
+            return $tags;
+        };
+
+        return $normalize($left) === $normalize($right);
     }
 
     /**

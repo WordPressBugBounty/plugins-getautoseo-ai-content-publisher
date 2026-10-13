@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.115
+Stable tag: 1.3.116
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.116 =
+* FIXED: WordPress post tags from AutoSEO are applied again when a later image save replaces them. The next sync also restores tags on posts that already lost them, without rewriting the article.
 
 = 1.3.115 =
 * FIXED: Updates from AutoSEO no longer overwrite an SEO title or meta description you set in Yoast, Rank Math, SEOPress, All in One SEO or SmartCrawl. AutoSEO only fills these fields when they are empty or still hold the value AutoSEO wrote.

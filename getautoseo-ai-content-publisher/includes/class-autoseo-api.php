@@ -865,6 +865,12 @@ class AutoSEO_API {
                             && !$missing_assets
                             && !$force_content_update
                         ) {
+                            // Content is unchanged, but a later image save can replace
+                            // tags. Apply the AutoSEO tag list without rewriting the post.
+                            if (!empty($article['wordpress_tags'])) {
+                                AutoSEO_Publisher::sync_tags_if_different($wp_post->ID, $article['wordpress_tags']);
+                            }
+
                             if ($needs_url_confirmation) {
                                 $publisher = new AutoSEO_Publisher();
                                 $published_url = $publisher->get_post_permalink($wp_post->ID);

@@ -16,6 +16,10 @@ class AutoSEO_Publisher {
     private static $batched_webhooks = array();
     private static $pending_tag_sync = array();
     private static $tag_shutdown_registered = false;
+    public static $applying_autoseo_tags = false;
+
+    const CTA_BUTTON_PATTERN = '/<a\b[^>]*style\s*=\s*(["\'])[^"\']*display:\s*inline-block;\s*padding:\s*14px\s+28px;[^"\']*\1[^>]*>.*?<\/a>/is';
+    private static $generated_fragment_kinds = array('author-box', 'article-disclaimer', 'cta');
 
     private $seo_owned_titles = array();
     private $seo_owned_descriptions = array();
@@ -589,6 +593,7 @@ class AutoSEO_Publisher {
         $this->set_wordpress_tags($post_id, $article);
 
         $this->sync_content_to_acf_fields($post_id);
+        $this->remember_autoseo_body($post_id);
 
         // Update sync table with post_id and published status
         $wpdb->update(
@@ -657,6 +662,12 @@ class AutoSEO_Publisher {
     public function bake_infographic_into_content($post_id) {
         $infographic_image_id = get_post_meta($post_id, '_autoseo_infographic_image_id', true);
         if (empty($infographic_image_id)) {
+            return;
+        }
+
+        // A body the user saved in WordPress keeps its own layout. A later
+        // image push must not move blocks in it.
+        if (get_post_meta($post_id, '_autoseo_manual_content_override', true)) {
             return;
         }
 
@@ -1147,13 +1158,12 @@ class AutoSEO_Publisher {
         }
 
         // Slug policy: keep the existing slug for normal content updates to
-        // preserve SEO equity and avoid breaking bookmarked links. However, when
-        // a replacement article (rewrite with new topic) takes over this post,
-        // the old slug no longer reflects the content and must be updated.
-        // $skip_webhook === false means the API flagged needs_url_confirmation,
-        // i.e. this article has never had a confirmed published URL — it is a
-        // new version claiming an existing post via previous_article_ids or
-        // title-based duplicate prevention.
+        // preserve SEO equity and avoid breaking bookmarked links.
+        // $skip_webhook === false means the API flagged needs_url_confirmation.
+        // That is a replacement article that has never had a confirmed URL,
+        // or a title edit while the post is still new. In both cases the
+        // AutoSEO slug must become the permalink. WordPress stores the old
+        // slug and redirects it.
         if (!$skip_webhook && !empty($article->slug)) {
             $new_slug = $this->sanitize_post_slug($article->slug);
 
@@ -1175,24 +1185,53 @@ class AutoSEO_Publisher {
         // authored body content intact.
         $page_builder = self::has_page_builder_content($existing_post->ID);
         $manual_content_override = get_post_meta($existing_post->ID, '_autoseo_manual_content_override', true);
-        $force_content_update = !empty($article->force_content_update);
-        $force_page_builder_content_update = !empty($article->force_page_builder_content_update);
+        $title_override = (bool) get_post_meta($existing_post->ID, '_autoseo_manual_title_override', true);
+        $excerpt_override = (bool) get_post_meta($existing_post->ID, '_autoseo_manual_excerpt_override', true);
+        $tags_override = (bool) get_post_meta($existing_post->ID, '_autoseo_manual_tags_override', true);
+        $replace_wordpress_body = !empty($article->replace_wordpress_body);
+        $backlink_skip_urls = array();
+        $backlink_check_ran = false;
 
-        if ($force_page_builder_content_update && $page_builder) {
-            $this->clear_page_builder_meta($existing_post->ID);
-            $this->log_debug(sprintf(
-                'Post %d page-builder metadata cleared for explicit AutoSEO force republish',
-                $existing_post->ID
-            ));
-            $page_builder = false;
+        // A flag from a save that changed only markup (older plugin versions
+        // flagged any byte difference) protects nothing. Clear it when the
+        // reader-visible body still matches what AutoSEO last wrote, or, for
+        // posts without a record, what AutoSEO sends now.
+        if ($manual_content_override && !$replace_wordpress_body) {
+            $written_fingerprint = (string) get_post_meta($existing_post->ID, '_autoseo_body_fingerprint', true);
+            if ($written_fingerprint === '') {
+                $written_fingerprint = self::body_fingerprint($this->normalize_youtube_embed_markup($article->content));
+            }
+            if (self::body_fingerprint($existing_post->post_content) === $written_fingerprint) {
+                delete_post_meta($existing_post->ID, '_autoseo_manual_content_override');
+                delete_post_meta($existing_post->ID, '_autoseo_manual_content_override_at');
+                $manual_content_override = false;
+                $this->log_debug(sprintf(
+                    'Post %d body flag cleared: the saved body has no reader-visible change',
+                    $existing_post->ID
+                ));
+            }
         }
 
-        if ($force_content_update && $manual_content_override && !$page_builder) {
-            delete_post_meta($existing_post->ID, '_autoseo_manual_content_override');
-            delete_post_meta($existing_post->ID, '_autoseo_manual_content_override_at');
+        // Only an explicit "Use the AutoSEO version" action may replace a
+        // WordPress edit. Automatic syncs, author-box updates, and backlink
+        // pushes keep the fields the user changed.
+        if ($replace_wordpress_body) {
+            if ($page_builder) {
+                $this->clear_page_builder_meta($existing_post->ID);
+                $this->log_debug(sprintf(
+                    'Post %d page-builder metadata cleared for explicit AutoSEO replace',
+                    $existing_post->ID
+                ));
+                $page_builder = false;
+            }
+
+            $this->clear_wordpress_edit_flags($existing_post->ID);
             $manual_content_override = false;
+            $title_override = false;
+            $excerpt_override = false;
+            $tags_override = false;
             $this->log_debug(sprintf(
-                'Post %d manual content override cleared for forced AutoSEO dashboard update',
+                'Post %d WordPress edit flags cleared for explicit AutoSEO replace',
                 $existing_post->ID
             ));
         }
@@ -1202,28 +1241,84 @@ class AutoSEO_Publisher {
             // untouched. We avoid wp_update_post here because it merges with
             // the existing row and re-runs content_save_pre (KSES), which can
             // degrade user-authored HTML over many syncs.
-            $title = !empty($article->title) ? $article->title : $existing_post->post_title;
+            $update_row = array(
+                'post_author' => $post_author,
+                'post_status' => 'publish',
+            );
+            $update_formats = array('%d', '%s');
+            if (!$title_override) {
+                $update_row = array(
+                    'post_title' => !empty($article->title) ? $article->title : $existing_post->post_title,
+                ) + $update_row;
+                array_unshift($update_formats, '%s');
+            }
+
+            // A fresh title edit must still change the permalink. wp_update_post
+            // would re-filter the builder HTML, so write post_name directly and
+            // keep the old slug for WordPress's own redirect.
+            // A title the user saved in WordPress keeps its slug.
+            if (!$title_override && !empty($post_data['post_name']) && $post_data['post_name'] !== $existing_post->post_name) {
+                $new_post_name = wp_unique_post_slug(
+                    $post_data['post_name'],
+                    $existing_post->ID,
+                    'publish',
+                    $existing_post->post_type ?: 'post',
+                    (int) $existing_post->post_parent
+                );
+                if ($new_post_name !== '' && $new_post_name !== $existing_post->post_name) {
+                    $old_slugs = (array) get_post_meta($existing_post->ID, '_wp_old_slug');
+                    if (!in_array($existing_post->post_name, $old_slugs, true)) {
+                        add_post_meta($existing_post->ID, '_wp_old_slug', $existing_post->post_name);
+                    }
+                    $update_row['post_name'] = $new_post_name;
+                    $update_formats[] = '%s';
+                    $this->log_debug(sprintf(
+                        'Updating slug for page-builder post %d: "%s" → "%s"',
+                        $existing_post->ID,
+                        $existing_post->post_name,
+                        $new_post_name
+                    ));
+                }
+            }
+
             $wpdb->update(
                 $wpdb->posts,
-                array('post_title' => $title, 'post_author' => $post_author, 'post_status' => 'publish'),
+                $update_row,
                 array('ID' => $existing_post->ID),
-                array('%s', '%d', '%s'),
+                $update_formats,
                 array('%d')
             );
             clean_post_cache($existing_post->ID);
             update_post_meta($existing_post->ID, '_autoseo_article_id', $article->autoseo_id);
             update_post_meta($existing_post->ID, '_autoseo_managed', '1');
 
-            // A user explicitly applying a changed author box must also work on
-            // Divi (and other builder) posts. Merge only the server-generated
-            // author-box fragment directly into the stored builder content, so
-            // the rest of the customer's layout remains untouched.
-            if ($force_content_update && $page_builder && !$manual_content_override) {
-                $this->sync_author_box_into_page_builder_content(
-                    $existing_post->ID,
-                    $existing_post->post_content,
-                    $article->content
+            // Patch generated blocks into the stored body. The rest of the
+            // user's article stays as they saved it.
+            $preserved_content = (string) $existing_post->post_content;
+            $patched_content = $this->sync_generated_fragments_into_content(
+                $existing_post->ID,
+                $preserved_content,
+                (string) $article->content,
+                $page_builder && !$manual_content_override && !empty($article->force_content_update)
+            );
+            if ($manual_content_override) {
+                $backlink_check_ran = true;
+                $backlink_result = $this->insert_missing_backlinks(
+                    $patched_content,
+                    isset($article->backlink_urls) ? $article->backlink_urls : array()
                 );
+                $patched_content = $backlink_result['content'];
+                $backlink_skip_urls = $backlink_result['skipped'];
+            }
+            if ($patched_content !== $preserved_content) {
+                $wpdb->update(
+                    $wpdb->posts,
+                    array('post_content' => $patched_content),
+                    array('ID' => $existing_post->ID),
+                    array('%s'),
+                    array('%d')
+                );
+                clean_post_cache($existing_post->ID);
             }
 
             $this->log_debug(sprintf(
@@ -1238,6 +1333,14 @@ class AutoSEO_Publisher {
                 $existing_post->ID,
                 strlen($article->content)
             ));
+
+            if ($title_override) {
+                unset($post_data['post_title']);
+                unset($post_data['post_name']);
+            }
+            if ($excerpt_override) {
+                unset($post_data['post_excerpt']);
+            }
 
             AutoSEO_Plugin::allow_content_updates();
             try {
@@ -1507,16 +1610,19 @@ class AutoSEO_Publisher {
             update_post_meta($existing_post->ID, '_autoseo_keywords', $keywords_array);
         }
 
-        // Update markdown content for LLM-friendly .md URLs
-        if (!empty($article->content_markdown)) {
+        // The .md URL must show the same text as the live page. A WordPress
+        // body edit owns that text, so keep the markdown that matches it.
+        if (!$page_builder && !$manual_content_override && !empty($article->content_markdown)) {
             update_post_meta($existing_post->ID, '_autoseo_content_markdown', $article->content_markdown);
         }
 
         // Update meta description and keywords for SEO
         $this->set_seo_meta_fields($existing_post->ID, $article, $previous_seo_title);
 
-        // Update WordPress tags
-        $this->set_wordpress_tags($existing_post->ID, $article);
+        // Update WordPress tags unless the user changed them in WordPress.
+        if (!$tags_override) {
+            $this->set_wordpress_tags($existing_post->ID, $article);
+        }
 
         if (!$page_builder && !$manual_content_override) {
             $this->sync_content_to_acf_fields($existing_post->ID);
@@ -1561,6 +1667,7 @@ class AutoSEO_Publisher {
         // intentionally preserving a user's page-builder or manual edits.
         if (!$page_builder && !$manual_content_override) {
             $this->clear_page_builder_meta($existing_post->ID);
+            $this->remember_autoseo_body($existing_post->ID);
         }
 
         $this->log_debug(sprintf(
@@ -1570,6 +1677,14 @@ class AutoSEO_Publisher {
             $published_url,
             $skip_webhook ? 'skipped' : (self::$batch_mode ? 'batched' : 'sent')
         ));
+
+        $this->notify_wordpress_edit_state(
+            $article,
+            $existing_post->ID,
+            $replace_wordpress_body,
+            $backlink_check_ran,
+            $backlink_skip_urls
+        );
 
         return array(
             'success' => true,
@@ -1671,93 +1786,416 @@ class AutoSEO_Publisher {
     }
 
     /**
-     * Update only the AutoSEO author box within a page-builder post.
+     * Remove the flags that tell later syncs to keep a WordPress edit.
      *
-     * Page builders own the surrounding markup, so replacing the entire body
-     * would discard customer layout changes. The incoming AutoSEO payload is
-     * the source of truth for this one generated fragment.
+     * @param int $post_id WordPress post ID
      */
-    private function sync_author_box_into_page_builder_content($post_id, $existing_content, $incoming_content) {
-        global $wpdb;
+    private function clear_wordpress_edit_flags($post_id) {
+        delete_post_meta($post_id, '_autoseo_manual_content_override');
+        delete_post_meta($post_id, '_autoseo_manual_content_override_at');
+        delete_post_meta($post_id, '_autoseo_manual_title_override');
+        delete_post_meta($post_id, '_autoseo_manual_excerpt_override');
+        delete_post_meta($post_id, '_autoseo_manual_tags_override');
+    }
 
-        $new_author_box = $this->extract_author_box_html($incoming_content);
-        $updated_content = $this->replace_author_box_html($existing_content, $new_author_box);
+    /**
+     * Copy the author box, disclaimer, and CTA button from AutoSEO HTML into
+     * the stored WordPress body. The rest of the user's article stays.
+     *
+     * A block changes only while it is still exactly what AutoSEO last wrote
+     * (an md5 in _autoseo_fragment_{kind}). A block the user edited or
+     * deleted stays as the user left it. Posts from before 1.3.118 have no
+     * record; only an untouched page-builder post on an explicit push keeps
+     * the old replace-or-append author box behaviour.
+     *
+     * @param int $post_id WordPress post ID
+     * @param string $existing_content Stored post_content
+     * @param string $incoming_content AutoSEO HTML
+     * @param bool $legacy_refresh True for the old page-builder push behaviour
+     * @return string
+     */
+    private function sync_generated_fragments_into_content($post_id, $existing_content, $incoming_content, $legacy_refresh) {
+        $content = (string) $existing_content;
 
-        if ($updated_content === $existing_content) {
+        foreach (self::$generated_fragment_kinds as $kind) {
+            $current = self::find_generated_fragment($content, $kind);
+            $wanted = $this->localize_author_thumbnail(self::find_generated_fragment($incoming_content, $kind));
+            $meta_key = '_autoseo_fragment_' . $kind;
+            $owned_hash = (string) get_post_meta($post_id, $meta_key, true);
+
+            if ($current === $wanted) {
+                $this->remember_generated_fragment($post_id, $kind, $wanted);
+                continue;
+            }
+
+            if ($owned_hash !== '') {
+                if ($current === '' || md5($current) !== $owned_hash) {
+                    continue;
+                }
+            } elseif (!$legacy_refresh || $kind === 'cta') {
+                continue;
+            }
+
+            if ($current === '') {
+                if ($wanted === '') {
+                    continue;
+                }
+                $content = rtrim($content) . "\n" . $wanted;
+            } else {
+                $position = strpos($content, $current);
+                $content = substr($content, 0, $position) . $wanted . substr($content, $position + strlen($current));
+            }
+            $this->remember_generated_fragment($post_id, $kind, $wanted);
+        }
+
+        return $content;
+    }
+
+    /**
+     * Record which generated blocks AutoSEO wrote, and the body fingerprint,
+     * after AutoSEO writes the whole post body.
+     *
+     * @param int $post_id WordPress post ID
+     */
+    private function remember_autoseo_body($post_id) {
+        $post = get_post($post_id);
+        if (!$post) {
             return;
         }
 
-        $wpdb->update(
-            $wpdb->posts,
-            array('post_content' => $updated_content),
-            array('ID' => $post_id),
-            array('%s'),
-            array('%d')
-        );
-        clean_post_cache($post_id);
-
-        $this->log_debug(sprintf(
-            'Updated author box in page-builder content for post %d (%s)',
-            $post_id,
-            $new_author_box === '' ? 'removed' : 'applied'
-        ));
+        $content = (string) $post->post_content;
+        foreach (self::$generated_fragment_kinds as $kind) {
+            $this->remember_generated_fragment($post_id, $kind, self::find_generated_fragment($content, $kind));
+        }
+        update_post_meta($post_id, '_autoseo_body_fingerprint', self::body_fingerprint($content));
     }
 
     /**
-     * Extract the complete author-box div from trusted server-generated HTML.
+     * @param int $post_id WordPress post ID
+     * @param string $kind Fragment kind
+     * @param string $html Fragment HTML, or '' when the post has none
      */
-    private function extract_author_box_html($html) {
-        if (!is_string($html) || strpos($html, 'author-box') === false) {
-            return '';
+    private function remember_generated_fragment($post_id, $kind, $html) {
+        $meta_key = '_autoseo_fragment_' . $kind;
+        if ($html === '') {
+            delete_post_meta($post_id, $meta_key);
+            return;
         }
-
-        $previous_errors = libxml_use_internal_errors(true);
-        $document = new DOMDocument('1.0', 'UTF-8');
-        $loaded = $document->loadHTML(
-            '<?xml encoding="UTF-8">' . $html,
-            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
-        );
-        libxml_clear_errors();
-        libxml_use_internal_errors($previous_errors);
-
-        if (!$loaded) {
-            return '';
-        }
-
-        $xpath = new DOMXPath($document);
-        $nodes = $xpath->query('//*[contains(concat(" ", normalize-space(@class), " "), " author-box ")]');
-        $author_box = $nodes ? $nodes->item(0) : null;
-
-        return $author_box ? trim($document->saveHTML($author_box)) : '';
+        update_post_meta($post_id, $meta_key, md5($html));
     }
 
     /**
-     * Replace an existing author-box div, or append the incoming one.
+     * Use the downloaded author photo instead of the remote one, the same
+     * way handle_author_thumbnail does for full writes.
+     *
+     * @param string $html Fragment HTML
+     * @return string
      */
-    private function replace_author_box_html($content, $new_author_box) {
-        if (!is_string($content)) {
-            $content = '';
+    private function localize_author_thumbnail($html) {
+        if ($html === '') {
+            return $html;
+        }
+        $remote = (string) get_option('autoseo_author_thumbnail_source_url', '');
+        $local = (string) get_option('autoseo_author_thumbnail_local_url', '');
+        if ($remote === '' || $local === '' || strpos($html, $remote) === false) {
+            return $html;
         }
 
-        $pattern = '/<div\b(?=[^>]*\bclass\s*=\s*(["\'])[^"\']*\bauthor-box\b[^"\']*\1)[^>]*>/i';
-        if (!preg_match($pattern, $content, $match, PREG_OFFSET_CAPTURE)) {
-            return $new_author_box === '' ? $content : rtrim($content) . "\n" . $new_author_box;
+        return str_replace($remote, $local, $html);
+    }
+
+    /**
+     * Return the exact HTML of the first generated block of $kind.
+     *
+     * @param string $html Source HTML
+     * @param string $kind author-box, article-disclaimer, or cta
+     * @return string
+     */
+    public static function find_generated_fragment($html, $kind) {
+        if (!is_string($html) || $html === '') {
+            return '';
+        }
+
+        if ($kind === 'cta') {
+            return preg_match(self::CTA_BUTTON_PATTERN, $html, $match) ? $match[0] : '';
+        }
+
+        return self::find_div_fragment($html, $kind);
+    }
+
+    /**
+     * Return the exact HTML of the first div with class $class.
+     *
+     * @param string $html Source HTML
+     * @param string $class Class name
+     * @return string
+     */
+    private static function find_div_fragment($html, $class) {
+        $pattern = '/<div\b(?=[^>]*\bclass\s*=\s*(["\'])(?:(?!\1).)*(?<![\w-])' . preg_quote($class, '/') . '(?![\w-])(?:(?!\1).)*\1)[^>]*>/is';
+        if (!preg_match($pattern, $html, $match, PREG_OFFSET_CAPTURE)) {
+            return '';
         }
 
         $start = $match[0][1];
-        $end = $this->find_matching_div_end($content, $start);
+        $end = self::find_matching_div_end($html, $start);
         if ($end === null) {
-            $this->log_debug('Could not replace malformed author-box HTML; preserving existing content');
-            return $content;
+            return '';
         }
 
-        return substr($content, 0, $start) . $new_author_box . substr($content, $end);
+        return substr($html, $start, $end - $start);
+    }
+
+    /**
+     * A fingerprint of the parts of a body a reader sees: text, headings,
+     * lists, emphasis, links, and images. Editor-only changes (paragraph
+     * tags, whitespace, entity encoding, attribute order) do not change it,
+     * so opening and saving a post in the classic editor is not an edit.
+     *
+     * @param string $html Post body
+     * @return string
+     */
+    public static function body_fingerprint($html) {
+        $html = (string) $html;
+        $html = preg_replace('/<!-- autoseo-infographic -->.*?<!-- \/autoseo-infographic -->/s', '', $html) ?? $html;
+        foreach (array('autoseo-infographic-container', 'author-box', 'article-disclaimer') as $class) {
+            for ($guard = 0; $guard < 5; $guard++) {
+                $fragment = self::find_div_fragment($html, $class);
+                if ($fragment === '') {
+                    break;
+                }
+                $html = str_replace($fragment, ' ', $html);
+            }
+        }
+
+        $structure = array();
+        if (preg_match_all('/<\s*(\/?)\s*(h[1-6]|ul|ol|li|blockquote|strong|b|em|i|u|a|img|table|tr|td|th)\b/i', $html, $tags, PREG_SET_ORDER)) {
+            $aliases = array('b' => 'strong', 'i' => 'em');
+            foreach ($tags as $tag) {
+                $name = strtolower($tag[2]);
+                $structure[] = $tag[1] . (isset($aliases[$name]) ? $aliases[$name] : $name);
+            }
+        }
+
+        $decode = function ($value) {
+            return trim(html_entity_decode((string) $value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        };
+        $hrefs = preg_match_all('/<a\b[^>]*\bhref\s*=\s*(["\'])(.*?)\1/is', $html, $href_matches)
+            ? array_map($decode, $href_matches[2])
+            : array();
+        $sources = preg_match_all('/<img\b[^>]*\bsrc\s*=\s*(["\'])(.*?)\1/is', $html, $src_matches)
+            ? array_map($decode, $src_matches[2])
+            : array();
+
+        $text = $decode(preg_replace('/<[^>]*>/', ' ', $html) ?? $html);
+        $text = trim(preg_replace('/[\s\x{00A0}\x{200B}]+/u', ' ', $text) ?? $text);
+
+        return md5(wp_json_encode(array($text, $structure, $hrefs, $sources)));
+    }
+
+    /**
+     * Wrap backlink anchor text that is still in the WordPress article.
+     * A missing sentence is reported and left unchanged.
+     *
+     * @param string $content Stored HTML
+     * @param mixed $backlinks List of url/anchor pairs
+     * @return array{content: string, skipped: array}
+     */
+    private function insert_missing_backlinks($content, $backlinks) {
+        $skipped = array();
+        if (!is_array($backlinks)) {
+            return array('content' => $content, 'skipped' => $skipped);
+        }
+
+        foreach ($backlinks as $link) {
+            $url = '';
+            $anchor = '';
+            if (is_array($link)) {
+                $url = isset($link['url']) ? (string) $link['url'] : '';
+                $anchor = isset($link['anchor']) ? (string) $link['anchor'] : '';
+            } elseif (is_object($link)) {
+                $url = isset($link->url) ? (string) $link->url : '';
+                $anchor = isset($link->anchor) ? (string) $link->anchor : '';
+            }
+            $url = trim($url);
+            $anchor = trim(wp_strip_all_tags($anchor));
+            if ($url === '' || $anchor === '') {
+                continue;
+            }
+            if ($this->content_links_to($content, $url)) {
+                continue;
+            }
+
+            $updated = $this->wrap_anchor_text_once($content, $anchor, $url);
+            if ($updated === null) {
+                $encoded_anchor = esc_html($anchor);
+                if ($encoded_anchor !== $anchor) {
+                    $updated = $this->wrap_anchor_text_once($content, $encoded_anchor, $url);
+                }
+            }
+            if ($updated === null) {
+                $skipped[] = $url;
+                continue;
+            }
+            $content = $updated;
+        }
+
+        return array('content' => $content, 'skipped' => $skipped);
+    }
+
+    /**
+     * True when an existing link points to $url. A longer URL that starts
+     * with $url does not count.
+     *
+     * @param string $content Stored HTML
+     * @param string $url Destination URL
+     * @return bool
+     */
+    private function content_links_to($content, $url) {
+        $wanted = rtrim(html_entity_decode($url, ENT_QUOTES | ENT_HTML5, 'UTF-8'), '/');
+        if (!preg_match_all('/<a\b[^>]*\bhref\s*=\s*(["\'])(.*?)\1/is', (string) $content, $matches)) {
+            return false;
+        }
+        foreach ($matches[2] as $href) {
+            if (strcasecmp(rtrim(html_entity_decode(trim($href), ENT_QUOTES | ENT_HTML5, 'UTF-8'), '/'), $wanted) === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Link the first plain-text occurrence of $anchor. Text already inside a
+     * link, a heading, code, or a script is left alone.
+     *
+     * @param string $content Stored HTML
+     * @param string $anchor Anchor text as it appears in the HTML source
+     * @param string $url Destination URL
+     * @return string|null Updated HTML, or null when the text is not present
+     */
+    private function wrap_anchor_text_once($content, $anchor, $url) {
+        $parts = preg_split('/(<[^>]+>)/', $content, -1, PREG_SPLIT_DELIM_CAPTURE);
+        if (!is_array($parts)) {
+            return null;
+        }
+
+        $blocked_tags = array('a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'script', 'style', 'code', 'pre', 'button', 'textarea', 'figcaption');
+        $open = array_fill_keys($blocked_tags, 0);
+        foreach ($parts as $index => $part) {
+            if ($part === '') {
+                continue;
+            }
+            if ($part[0] === '<') {
+                if (preg_match('/^<(\/?)\s*([a-z0-9]+)\b/i', $part, $tag)) {
+                    $name = strtolower($tag[2]);
+                    if (isset($open[$name])) {
+                        if ($tag[1] === '/') {
+                            $open[$name] = max(0, $open[$name] - 1);
+                        } elseif (substr(rtrim($part), -2) !== '/>') {
+                            $open[$name]++;
+                        }
+                    }
+                }
+                continue;
+            }
+            if (array_sum($open) > 0 || strpos($part, $anchor) === false) {
+                continue;
+            }
+
+            $linked = '<a href="' . esc_url($url) . '">' . $anchor . '</a>';
+            $position = strpos($part, $anchor);
+            $parts[$index] = substr($part, 0, $position) . $linked . substr($part, $position + strlen($anchor));
+
+            return implode('', $parts);
+        }
+
+        return null;
+    }
+
+    /**
+     * Tell AutoSEO that a WordPress edit was replaced, or that a backlink
+     * could not be placed in the saved WordPress article.
+     *
+     * @param object $article Sync-table article
+     * @param int $post_id WordPress post ID
+     * Each webhook is sent only when the state differs from the last state
+     * AutoSEO confirmed, so routine syncs of edited posts cost no requests.
+     *
+     * @param bool $cleared True when the AutoSEO body replaced a WordPress edit
+     * @param bool $backlink_check_ran True when this update looked for backlinks
+     * @param array $skipped_urls Backlink URLs that could not be placed
+     */
+    private function notify_wordpress_edit_state($article, $post_id, $cleared, $backlink_check_ran, $skipped_urls) {
+        if (!class_exists('AutoSEO_API') || empty($article->autoseo_id)) {
+            return;
+        }
+
+        $api = new AutoSEO_API();
+        if ($cleared) {
+            $result = $api->send_webhook('wordpress_edits_cleared', array(
+                'article_id' => $article->autoseo_id,
+                'wordpress_post_id' => $post_id,
+            ));
+            if (!is_wp_error($result)) {
+                delete_post_meta($post_id, '_autoseo_reported_edit_state');
+                delete_post_meta($post_id, '_autoseo_reported_backlink_skips');
+            }
+            return;
+        }
+
+        $state = array(
+            'content' => (bool) get_post_meta($post_id, '_autoseo_manual_content_override', true),
+            'title' => (bool) get_post_meta($post_id, '_autoseo_manual_title_override', true),
+            'tags' => (bool) get_post_meta($post_id, '_autoseo_manual_tags_override', true),
+        );
+        $state_key = implode(',', array_map('intval', $state));
+        $reported_state = (string) get_post_meta($post_id, '_autoseo_reported_edit_state', true);
+        if ($reported_state === '') {
+            $reported_state = '0,0,0';
+        }
+        if ($state_key !== $reported_state) {
+            $result = $api->send_webhook('wordpress_content_edited', array(
+                'article_id' => $article->autoseo_id,
+                'wordpress_post_id' => $post_id,
+            ) + $state);
+            if (!is_wp_error($result)) {
+                update_post_meta($post_id, '_autoseo_reported_edit_state', $state_key);
+                if (!$state['content']) {
+                    // AutoSEO drops its skipped-link note with the body flag.
+                    delete_post_meta($post_id, '_autoseo_reported_backlink_skips');
+                }
+            }
+        }
+
+        if (!$backlink_check_ran) {
+            return;
+        }
+
+        $urls = array_values(array_unique(is_array($skipped_urls) ? $skipped_urls : array()));
+        sort($urls);
+        $urls_key = implode("\n", $urls);
+        if ($urls_key === (string) get_post_meta($post_id, '_autoseo_reported_backlink_skips', true)) {
+            return;
+        }
+
+        $result = $api->send_webhook('wordpress_backlink_skipped', array(
+            'article_id' => $article->autoseo_id,
+            'wordpress_post_id' => $post_id,
+            'urls' => $urls,
+        ));
+        if (!is_wp_error($result)) {
+            if ($urls_key === '') {
+                delete_post_meta($post_id, '_autoseo_reported_backlink_skips');
+            } else {
+                update_post_meta($post_id, '_autoseo_reported_backlink_skips', wp_slash($urls_key));
+            }
+        }
     }
 
     /**
      * Return the offset immediately after the closing div paired with $start.
      */
-    private function find_matching_div_end($content, $start) {
+    private static function find_matching_div_end($content, $start) {
         $fragment = substr($content, $start);
         if (!preg_match_all('/<\/?div\b[^>]*>/i', $fragment, $tags, PREG_OFFSET_CAPTURE)) {
             return null;
@@ -2093,7 +2531,7 @@ class AutoSEO_Publisher {
     public static function sync_tags_if_different($post_id, $tag_string) {
         $post_id = (int) $post_id;
         $desired = self::parse_tag_list($tag_string);
-        if ($post_id <= 0 || empty($desired)) {
+        if ($post_id <= 0 || empty($desired) || get_post_meta($post_id, '_autoseo_manual_tags_override', true)) {
             return;
         }
 
@@ -2107,7 +2545,9 @@ class AutoSEO_Publisher {
             return;
         }
 
+        self::$applying_autoseo_tags = true;
         $result = wp_set_post_tags($post_id, $desired, false);
+        self::$applying_autoseo_tags = false;
 
         if (is_wp_error($result)) {
             error_log(sprintf(
@@ -2136,14 +2576,16 @@ class AutoSEO_Publisher {
 
         foreach ($pending as $post_id => $tag_string) {
             $desired = self::parse_tag_list($tag_string);
-            if (empty($desired)) {
+            if (empty($desired) || get_post_meta((int) $post_id, '_autoseo_manual_tags_override', true)) {
                 continue;
             }
             $current = wp_get_post_tags((int) $post_id, array('fields' => 'names'));
             if (!is_array($current) || self::tag_lists_match($current, $desired)) {
                 continue;
             }
+            self::$applying_autoseo_tags = true;
             wp_set_post_tags((int) $post_id, $desired, false);
+            self::$applying_autoseo_tags = false;
             update_post_meta((int) $post_id, '_autoseo_wordpress_tags', $tag_string);
         }
     }
@@ -2484,6 +2926,37 @@ class AutoSEO_Publisher {
     }
 
     /**
+     * Write a focus keyword unless the user changed it after AutoSEO last wrote it.
+     * The first write is stored so a later WordPress change is left in place.
+     *
+     * @param int $post_id WordPress post ID
+     * @param string $meta_key SEO plugin meta key
+     * @param string $value Focus keyword
+     * @return bool True when the value was written
+     */
+    private function write_owned_focus_keyword($post_id, $meta_key, $value) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return false;
+        }
+
+        $owned_key = '_autoseo_owned_focus_' . $meta_key;
+        $owned = (string) get_post_meta($post_id, $owned_key, true);
+        if ($owned !== '' && !$this->can_write_seo_value(get_post_meta($post_id, $meta_key, true), array($owned))) {
+            $this->log_debug(sprintf(
+                'Kept %s for post %d: value was set in WordPress',
+                $meta_key,
+                $post_id
+            ));
+            return false;
+        }
+
+        update_post_meta($post_id, $meta_key, $value);
+        update_post_meta($post_id, $owned_key, $value);
+        return true;
+    }
+
+    /**
      * Write an SEO title/description post meta unless the user set it in WordPress.
      *
      * @param int $post_id WordPress post ID
@@ -2548,8 +3021,7 @@ class AutoSEO_Publisher {
             }
         }
         
-        if (!empty($focus_keyphrase)) {
-            update_post_meta($post_id, '_yoast_wpseo_focuskw', $focus_keyphrase);
+        if (!empty($focus_keyphrase) && $this->write_owned_focus_keyword($post_id, '_yoast_wpseo_focuskw', $focus_keyphrase)) {
             $this->log_debug(sprintf(
                 'Set Yoast focus keyphrase for post %d: "%s"',
                 $post_id,
@@ -2615,8 +3087,7 @@ class AutoSEO_Publisher {
             }
         }
         
-        if (!empty($focus_keyphrase)) {
-            update_post_meta($post_id, 'rank_math_focus_keyword', $focus_keyphrase);
+        if (!empty($focus_keyphrase) && $this->write_owned_focus_keyword($post_id, 'rank_math_focus_keyword', $focus_keyphrase)) {
             $this->log_debug(sprintf(
                 'Set Rank Math focus keyword for post %d: "%s"',
                 $post_id,
@@ -2682,9 +3153,7 @@ class AutoSEO_Publisher {
                 $focus_keyphrase = $meta_keywords_array[0];
             }
         }
-        if (!empty($focus_keyphrase)) {
-            // SEOPress stores the target keyword as a comma-separated list
-            update_post_meta($post_id, '_seopress_analysis_target_kw', $focus_keyphrase);
+        if (!empty($focus_keyphrase) && $this->write_owned_focus_keyword($post_id, '_seopress_analysis_target_kw', $focus_keyphrase)) {
             $this->log_debug(sprintf(
                 'Set SEOPress target keyword for post %d: "%s"',
                 $post_id,

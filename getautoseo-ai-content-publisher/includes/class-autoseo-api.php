@@ -841,13 +841,18 @@ class AutoSEO_API {
                         }
 
                         $force_content_update = !empty($article['force_content_update']);
+                        $replace_wordpress_body = !empty($article['replace_wordpress_body']);
+                        $wordpress_body_owned = (bool) get_post_meta($wp_post->ID, '_autoseo_manual_content_override', true)
+                            || AutoSEO_Publisher::has_page_builder_content($wp_post->ID);
 
                         // Older syncs can leave markdown/plain text in post_content while the
                         // API now sends proper HTML with paragraph tags. Re-push when the
                         // stored post is missing paragraphs but incoming content has them.
+                        // A body the user saved in WordPress is left as they saved it.
                         $stored_has_paragraphs = (bool) preg_match('/<p\b/i', $wp_post->post_content);
                         $incoming_has_paragraphs = (bool) preg_match('/<p\b/i', $article['content'] ?? '');
-                        $needs_paragraph_repair = $incoming_has_paragraphs
+                        $needs_paragraph_repair = !$wordpress_body_owned
+                            && $incoming_has_paragraphs
                             && !$stored_has_paragraphs
                             && preg_match('/<(h[1-6]|div|ul|ol)\b/i', $wp_post->post_content);
 
@@ -864,10 +869,12 @@ class AutoSEO_API {
                             && $api_updated_at <= $synced_at_utc
                             && !$missing_assets
                             && !$force_content_update
+                            && !$replace_wordpress_body
                         ) {
                             // Content is unchanged, but a later image save can replace
                             // tags. Apply the AutoSEO tag list without rewriting the post.
-                            if (!empty($article['wordpress_tags'])) {
+                            // Tags the user changed in WordPress stay as they saved them.
+                            if (!empty($article['wordpress_tags']) && !get_post_meta($wp_post->ID, '_autoseo_manual_tags_override', true)) {
                                 AutoSEO_Publisher::sync_tags_if_different($wp_post->ID, $article['wordpress_tags']);
                             }
 
@@ -910,6 +917,10 @@ class AutoSEO_API {
                         ));
                         if ($refreshed_article) {
                             $refreshed_article->force_content_update = $force_content_update;
+                            $refreshed_article->replace_wordpress_body = $replace_wordpress_body;
+                            $refreshed_article->backlink_urls = (isset($article['backlink_urls']) && is_array($article['backlink_urls']))
+                                ? $article['backlink_urls']
+                                : array();
                         }
                         $update_result = $publisher->update_existing_article($existing->id, $refreshed_article, $wp_post, $skip_webhook, $is_push_mode);
                         if (!is_wp_error($update_result)) {
@@ -1162,9 +1173,10 @@ class AutoSEO_API {
      * 
      * @param string $event Event name
      * @param array $data Event data
+     * @param bool $blocking False sends without waiting for the response
      * @return bool|WP_Error
      */
-    public function send_webhook($event, $data = array()) {
+    public function send_webhook($event, $data = array(), $blocking = true) {
         if (empty($this->api_key)) {
             return new WP_Error('no_api_key', __('API key is not configured', 'getautoseo-ai-content-publisher'));
         }
@@ -1204,12 +1216,17 @@ class AutoSEO_API {
                 'X-AutoSEO-Signature' => $signature,
             ),
             'body' => $json_body,
-            'timeout' => 15,
+            'timeout' => $blocking ? 15 : 1,
+            'blocking' => (bool) $blocking,
         ));
 
         if (is_wp_error($response)) {
             $this->log_debug('Webhook send failed: ' . $response->get_error_message());
             return $response;
+        }
+
+        if (!$blocking) {
+            return true;
         }
 
         $status_code = wp_remote_retrieve_response_code($response);

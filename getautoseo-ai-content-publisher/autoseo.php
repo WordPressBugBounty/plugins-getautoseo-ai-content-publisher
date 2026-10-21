@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.116
+ * Version: 1.3.118
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.116');
+define('AUTOSEO_VERSION', '1.3.118');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -63,6 +63,7 @@ class AutoSEO_Plugin {
      * wp_insert_post / wp_update_post calls and clears it immediately after.
      */
     private static $allow_content_update = false;
+    private static $pending_edit_notices = array();
 
     public static function allow_content_updates() {
         self::$allow_content_update = true;
@@ -146,6 +147,8 @@ class AutoSEO_Plugin {
         // (admin editor, REST API, third-party plugins). Only the plugin's own
         // sync/publish/update code bypasses this via the $allow_content_update flag.
         add_filter('wp_insert_post_data', array($this, 'protect_autoseo_content_on_admin_save'), 10, 2);
+        add_action('set_object_terms', array($this, 'remember_manual_tag_edit'), 10, 6);
+        add_action('shutdown', array($this, 'send_pending_wordpress_edit_notices'));
 
         // Add SVG/path to TinyMCE valid elements so social icons display in the editor
         add_filter('tiny_mce_before_init', array($this, 'add_svg_to_tinymce_valid_elements'));
@@ -3367,11 +3370,11 @@ class AutoSEO_Plugin {
                     wp_cache_delete($article->post_id, 'posts');
                 }
                 
-                // Update and republish the existing post. Force resync is an
-                // explicit AutoSEO action, so it should refresh body content even
-                // if the post was previously marked as manually edited in WP.
+                // Update and republish the existing post. This endpoint is the
+                // explicit "Use the AutoSEO version" action, so it may replace
+                // a body, title, or tags the user saved in WordPress.
                 $article->force_content_update = true;
-                $article->force_page_builder_content_update = true;
+                $article->replace_wordpress_body = true;
                 $publisher = new AutoSEO_Publisher();
                 $result = $publisher->update_existing_article($article->id, $article, $existing_post);
                 
@@ -4172,7 +4175,7 @@ class AutoSEO_Plugin {
                                 <?php esc_html_e('AutoSEO Managed Article', 'getautoseo-ai-content-publisher'); ?>
                             </h3>
                             <p style="margin: 0;">
-                                <?php esc_html_e('You can edit this article here. If you change the body content in WordPress, AutoSEO will remember that and will not overwrite the body on future syncs. Title, SEO settings, categories, tags, and images can still sync from AutoSEO.', 'getautoseo-ai-content-publisher'); ?>
+                                <?php esc_html_e('You can edit this article here. After you save, AutoSEO keeps your body, title, and tags. We replace them only when you choose Use the AutoSEO version in your dashboard.', 'getautoseo-ai-content-publisher'); ?>
                             </p>
                         </div>
                     </div>
@@ -4213,7 +4216,7 @@ class AutoSEO_Plugin {
                 position: relative;
             }
             body.post-php .autoseo-readonly-editor #postdivrich::before {
-                content: "AutoSEO article: WordPress body edits will be preserved after saving";
+                content: "AutoSEO keeps the changes you save here";
                 display: block;
                 background: #e8f4fd;
                 color: #2980b9;
@@ -4349,18 +4352,16 @@ class AutoSEO_Plugin {
     }
 
     /**
-     * Detect manual body edits on AutoSEO posts. Earlier versions silently
-     * discarded content changes here, which made the WordPress editor appear
-     * broken. Now, a real body change marks the post as user-managed so later
-     * AutoSEO syncs keep the WordPress body intact.
+     * Remember body, title, and excerpt changes on AutoSEO posts.
+     * Earlier versions discarded content changes here. A real change now
+     * marks that field so later syncs keep the WordPress value.
      *
-     * Bypassed when:
-     *  - The plugin's own code sets $allow_content_update before writing.
-     *  - The post has active page-builder data (Elementor, Divi, etc.),
-     *    meaning the user is intentionally managing content with a builder.
+     * Bypassed when the plugin's own code sets $allow_content_update.
+     * Page-builder posts still save their own body. Title and excerpt
+     * changes on those posts are remembered.
      */
     public function protect_autoseo_content_on_admin_save($data, $postarr) {
-        if (self::$allow_content_update) {
+        if (self::$allow_content_update || !$this->is_person_editing()) {
             return $data;
         }
 
@@ -4368,28 +4369,154 @@ class AutoSEO_Plugin {
             return $data;
         }
 
-        if (!get_post_meta($postarr['ID'], '_autoseo_managed', true)) {
+        $post_id = (int) $postarr['ID'];
+        if (!get_post_meta($post_id, '_autoseo_managed', true)) {
             return $data;
         }
 
-        // If the user is managing this post with a page builder, let the
-        // builder save its own content without interference.
-        if (AutoSEO_Publisher::has_page_builder_content($postarr['ID'])) {
+        $original_post = get_post($post_id);
+        if (!$original_post) {
             return $data;
         }
 
-        $original_post = get_post($postarr['ID']);
-        if ($original_post && array_key_exists('post_content', $data)) {
-            $incoming_content = (string) $data['post_content'];
-            $original_content = (string) $original_post->post_content;
+        if (array_key_exists('post_title', $data)) {
+            $incoming_title = trim((string) wp_unslash($data['post_title']));
+            if ($incoming_title !== trim((string) $original_post->post_title)) {
+                update_post_meta($post_id, '_autoseo_manual_title_override', '1');
+                $this->queue_wordpress_edit_notice($post_id);
+            }
+        }
 
-            if ($incoming_content !== $original_content) {
-                update_post_meta($postarr['ID'], '_autoseo_manual_content_override', '1');
-                update_post_meta($postarr['ID'], '_autoseo_manual_content_override_at', current_time('mysql'));
+        if (array_key_exists('post_excerpt', $data)) {
+            $incoming_excerpt = trim((string) wp_unslash($data['post_excerpt']));
+            if ($incoming_excerpt !== trim((string) $original_post->post_excerpt)) {
+                update_post_meta($post_id, '_autoseo_manual_excerpt_override', '1');
+                $this->queue_wordpress_edit_notice($post_id);
+            }
+        }
+
+        // A page builder owns the body. Do not treat its save as a classic
+        // editor body edit.
+        if (AutoSEO_Publisher::has_page_builder_content($post_id)) {
+            return $data;
+        }
+
+        // The classic editor rewrites markup on every save (paragraph tags,
+        // entities, stripped SVG). Only a reader-visible change is an edit.
+        if (array_key_exists('post_content', $data)) {
+            $incoming_content = (string) wp_unslash($data['post_content']);
+            if ($incoming_content !== (string) $original_post->post_content
+                && AutoSEO_Publisher::body_fingerprint($incoming_content) !== AutoSEO_Publisher::body_fingerprint($original_post->post_content)
+            ) {
+                update_post_meta($post_id, '_autoseo_manual_content_override', '1');
+                update_post_meta($post_id, '_autoseo_manual_content_override_at', current_time('mysql'));
+                $this->queue_wordpress_edit_notice($post_id);
             }
         }
 
         return $data;
+    }
+
+    /**
+     * Remember a tag change made outside an AutoSEO sync.
+     *
+     * @param int $object_id Post ID
+     * @param array $terms Term identifiers
+     * @param array $tt_ids Term taxonomy IDs
+     * @param string $taxonomy Taxonomy name
+     * @param bool $append Whether terms were appended
+     * @param array $old_tt_ids Term taxonomy IDs before the change
+     */
+    public function remember_manual_tag_edit($object_id, $terms, $tt_ids, $taxonomy, $append = false, $old_tt_ids = array()) {
+        if ($taxonomy !== 'post_tag'
+            || self::$allow_content_update
+            || AutoSEO_Publisher::$applying_autoseo_tags
+            || !$this->is_person_editing()
+        ) {
+            return;
+        }
+
+        $post_id = (int) $object_id;
+        if ($post_id <= 0 || !get_post_meta($post_id, '_autoseo_managed', true)) {
+            return;
+        }
+
+        // Every classic-editor save re-sends the tag box. An unchanged list
+        // is not an edit.
+        $before = array_map('intval', (array) $old_tt_ids);
+        $after = array_map('intval', (array) $tt_ids);
+        sort($before);
+        sort($after);
+        if ($before === $after) {
+            return;
+        }
+
+        $current = wp_get_post_tags($post_id, array('fields' => 'names'));
+        if (!is_array($current)) {
+            $current = array();
+        }
+        $stored = (string) get_post_meta($post_id, '_autoseo_wordpress_tags', true);
+        $stored_tags = array_values(array_filter(array_map('trim', explode(',', $stored))));
+        $normalize = function ($tags) {
+            $tags = array_map(function ($tag) {
+                return strtolower(trim((string) $tag));
+            }, $tags);
+            sort($tags);
+            return array_values(array_filter($tags, function ($tag) {
+                return $tag !== '';
+            }));
+        };
+        if ($normalize($current) === $normalize($stored_tags)) {
+            return;
+        }
+
+        update_post_meta($post_id, '_autoseo_manual_tags_override', '1');
+        $this->queue_wordpress_edit_notice($post_id);
+    }
+
+    /**
+     * True for a logged-in person's request. Cron jobs, REST calls from
+     * AutoSEO, and other background work are not WordPress edits.
+     *
+     * @return bool
+     */
+    private function is_person_editing() {
+        return get_current_user_id() > 0 && !wp_doing_cron();
+    }
+
+    /**
+     * @param int $post_id WordPress post ID
+     */
+    private function queue_wordpress_edit_notice($post_id) {
+        self::$pending_edit_notices[(int) $post_id] = true;
+    }
+
+    /**
+     * Tell AutoSEO which posts were edited in WordPress during this request.
+     */
+    public function send_pending_wordpress_edit_notices() {
+        if (empty(self::$pending_edit_notices) || !class_exists('AutoSEO_API')) {
+            return;
+        }
+
+        $api = new AutoSEO_API();
+        foreach (array_keys(self::$pending_edit_notices) as $post_id) {
+            $article_id = get_post_meta($post_id, '_autoseo_article_id', true);
+            if ($article_id === '' || $article_id === false) {
+                continue;
+            }
+            // Do not make the editor wait for AutoSEO. The next sync confirms
+            // the state with a blocking call, because this one is unconfirmed.
+            $api->send_webhook('wordpress_content_edited', array(
+                'article_id' => $article_id,
+                'wordpress_post_id' => $post_id,
+                'content' => (bool) get_post_meta($post_id, '_autoseo_manual_content_override', true),
+                'title' => (bool) get_post_meta($post_id, '_autoseo_manual_title_override', true),
+                'tags' => (bool) get_post_meta($post_id, '_autoseo_manual_tags_override', true),
+            ), false);
+            update_post_meta($post_id, '_autoseo_reported_edit_state', 'unconfirmed');
+        }
+        self::$pending_edit_notices = array();
     }
 
     /**

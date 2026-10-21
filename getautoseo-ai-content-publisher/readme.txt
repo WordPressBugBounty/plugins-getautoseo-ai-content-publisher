@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.116
+Stable tag: 1.3.118
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,15 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.118 =
+* When you edit an article in WordPress, AutoSEO keeps that body, title, and those tags. A later sync does not replace the article. Choose Use the AutoSEO version in the article page when you want the AutoSEO article to go live instead.
+* A later sync updates the author box, disclaimer, and call-to-action button inside your version only when you did not change them. A block you edited or deleted stays as you left it.
+* Opening and saving an article without changing the text no longer counts as an edit.
+* A backlink is added inside your WordPress article when the original sentence is still there. When that sentence is gone, the article page says the link was not added.
+
+= 1.3.117 =
+* When you edit an article title soon after it is published, the WordPress URL changes to match the new title. This includes posts edited with a page builder. The old URL redirects to the new one.
 
 = 1.3.116 =
 * FIXED: WordPress post tags from AutoSEO are applied again when a later image save replaces them. The next sync also restores tags on posts that already lost them, without rewriting the article.

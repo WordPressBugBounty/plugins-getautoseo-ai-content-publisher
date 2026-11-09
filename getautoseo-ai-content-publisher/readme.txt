@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.118
+Stable tag: 1.3.122
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,19 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.122 =
+* Backlinks now reach articles you edited in WordPress more often. The link text is found even when its case, spacing, quotes, or bold and italic formatting changed.
+* Divi and WPBakery posts now get backlinks placed in your saved text. For other page builders, AutoSEO is told which links are missing and moves them to another article. Your edits stay as you saved them.
+
+= 1.3.121 =
+* A featured image you set in WordPress stays in place when AutoSEO syncs an article or adds a backlink. AutoSEO uploads its own hero image again only when you choose Use the AutoSEO version.
+
+= 1.3.120 =
+* The unbranded plugin (Visibly and white-label) now checks getautoseo.com for updates, so WordPress can show Update Now. The WordPress.org plugin is unchanged.
+
+= 1.3.119 =
+* A publication date you change in the AutoSEO dashboard now reaches posts you edited in WordPress or built with a page builder. Before, the new date was applied only to posts AutoSEO still fully managed.
 
 = 1.3.118 =
 * When you edit an article in WordPress, AutoSEO keeps that body, title, and those tags. A later sync does not replace the article. Choose Use the AutoSEO version in the article page when you want the AutoSEO article to go live instead.

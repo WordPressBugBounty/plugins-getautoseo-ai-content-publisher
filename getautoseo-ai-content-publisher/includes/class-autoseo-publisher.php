@@ -1253,6 +1253,16 @@ class AutoSEO_Publisher {
                 array_unshift($update_formats, '%s');
             }
 
+            // A publication date changed in the AutoSEO dashboard must still
+            // reach a post whose body the user owns. $post_data only carries
+            // the date when it differs from the stored post (see above).
+            if (!empty($post_data['post_date_gmt']) && !empty($post_data['post_date'])) {
+                $update_row['post_date'] = $post_data['post_date'];
+                $update_row['post_date_gmt'] = $post_data['post_date_gmt'];
+                $update_formats[] = '%s';
+                $update_formats[] = '%s';
+            }
+
             // A fresh title edit must still change the permalink. wp_update_post
             // would re-filter the builder HTML, so write post_name directly and
             // keep the old slug for WordPress's own redirect.
@@ -1301,12 +1311,14 @@ class AutoSEO_Publisher {
                 (string) $article->content,
                 $page_builder && !$manual_content_override && !empty($article->force_content_update)
             );
-            if ($manual_content_override) {
-                $backlink_check_ran = true;
-                $backlink_result = $this->insert_missing_backlinks(
-                    $patched_content,
-                    isset($article->backlink_urls) ? $article->backlink_urls : array()
-                );
+            $backlink_check_ran = true;
+            $backlink_targets = isset($article->backlink_urls) ? $article->backlink_urls : array();
+            if ($page_builder && !self::page_builder_renders_post_content($page_builder)) {
+                // The builder renders its own data, not post_content. Report
+                // links it does not hold so AutoSEO moves them to another article.
+                $backlink_skip_urls = $this->backlinks_missing_from_builder($existing_post->ID, $patched_content, $backlink_targets);
+            } else {
+                $backlink_result = $this->insert_missing_backlinks($patched_content, $backlink_targets);
                 $patched_content = $backlink_result['content'];
                 $backlink_skip_urls = $backlink_result['skipped'];
             }
@@ -1419,9 +1431,29 @@ class AutoSEO_Publisher {
             }
             
             $should_download_hero = false;
+            $replace_featured_image = !empty($article->replace_wordpress_body);
+            $user_replaced_featured_image = self::user_replaced_featured_image($existing_post->ID);
             
             if (!empty($new_hero_url)) {
-                if (!$has_featured_image) {
+                if ($replace_featured_image) {
+                    $should_download_hero = true;
+                    $this->log_debug(sprintf(
+                        'Hero image download needed for post %d - explicit AutoSEO replace',
+                        $existing_post->ID
+                    ));
+                } elseif ($user_replaced_featured_image) {
+                    // The customer chose a different featured image. Do not
+                    // download the AutoSEO hero over it, even when the hero
+                    // URL changed. Leave _autoseo_hero_attachment_id as the
+                    // last file AutoSEO set, so the next sync still sees the
+                    // difference.
+                    $this->log_debug(sprintf(
+                        'Hero image kept for post %d - featured image was changed in WordPress (AutoSEO attachment %s, current %s)',
+                        $existing_post->ID,
+                        get_post_meta($existing_post->ID, '_autoseo_hero_attachment_id', true),
+                        get_post_thumbnail_id($existing_post->ID)
+                    ));
+                } elseif (!$has_featured_image) {
                     $should_download_hero = true;
                     $this->log_debug(sprintf(
                         'Hero image download needed for post %d - no featured image exists',
@@ -1459,10 +1491,9 @@ class AutoSEO_Publisher {
                             $existing_post->ID
                         ));
                     } elseif ((int) $autoseo_attachment_id !== (int) $current_thumbnail_id) {
-                        // AutoSEO set the thumbnail, but it was changed afterward
-                        // (user manually changed it in WP or a plugin swapped it).
-                        // Respect the change — update tracking to match current thumbnail.
-                        update_post_meta($existing_post->ID, '_autoseo_hero_attachment_id', $current_thumbnail_id);
+                        // The featured image is not the last AutoSEO attachment.
+                        // Keep it. Do not store the customer's attachment id as
+                        // ours, or a later hero URL change would replace it.
                         $this->log_debug(sprintf(
                             'Hero image thumbnail changed externally for post %d - respecting change (was: %s, now: %s)',
                             $existing_post->ID,
@@ -1786,6 +1817,91 @@ class AutoSEO_Publisher {
     }
 
     /**
+     * True when syncs keep the WordPress body: the user edited it, or a page
+     * builder owns it.
+     *
+     * @param int $post_id WordPress post ID
+     * @return bool
+     */
+    public static function wordpress_body_is_owned($post_id) {
+        return (bool) get_post_meta($post_id, '_autoseo_manual_content_override', true)
+            || (bool) self::has_page_builder_content($post_id);
+    }
+
+    /**
+     * Divi and WPBakery render the shortcodes in post_content, so a link put
+     * there goes live. The other builders render their own post meta.
+     *
+     * @param string $builder Name from has_page_builder_content()
+     * @return bool
+     */
+    private static function page_builder_renders_post_content($builder) {
+        return in_array($builder, array('Divi', 'WPBakery'), true);
+    }
+
+    /**
+     * Backlink URLs that neither post_content nor the builder data links to.
+     * The builder data is not changed.
+     *
+     * @param int $post_id WordPress post ID
+     * @param string $content Stored post_content
+     * @param mixed $backlinks List of url/anchor pairs
+     * @return array Missing URLs
+     */
+    private function backlinks_missing_from_builder($post_id, $content, $backlinks) {
+        $builder_data = '';
+        foreach (array('_elementor_data', '_fl_builder_data', 'brizy', 'ct_builder_shortcodes', '_aviaLayoutBuilderCleanData') as $meta_key) {
+            $value = get_post_meta($post_id, $meta_key, true);
+            if ($value === '' || $value === false || $value === null) {
+                continue;
+            }
+            if (!is_string($value)) {
+                $value = wp_json_encode($value);
+            }
+            // JSON stores "https:\/\/example.com".
+            $builder_data .= ' ' . str_replace('\\/', '/', (string) $value);
+        }
+
+        $missing = array();
+        foreach ($this->backlink_target_pairs($backlinks) as $link) {
+            if ($this->content_links_to($content, $link['url'])) {
+                continue;
+            }
+            if ($builder_data !== '' && stripos($builder_data, rtrim($link['url'], '/')) !== false) {
+                continue;
+            }
+            $missing[] = $link['url'];
+        }
+
+        return $missing;
+    }
+
+    /**
+     * True when the featured image is not the last attachment AutoSEO set.
+     * Posts with no tracking id are not treated as a customer change.
+     *
+     * @param int $post_id WordPress post ID
+     * @return bool
+     */
+    public static function user_replaced_featured_image($post_id) {
+        if (!has_post_thumbnail($post_id)) {
+            return false;
+        }
+
+        $thumbnail_id = (int) get_post_thumbnail_id($post_id);
+        if ($thumbnail_id <= 0 || !wp_get_attachment_url($thumbnail_id)) {
+            return false;
+        }
+
+        $autoseo_attachment_id = get_post_meta($post_id, '_autoseo_hero_attachment_id', true);
+        if ($autoseo_attachment_id === '' || $autoseo_attachment_id === false || $autoseo_attachment_id === null) {
+            return false;
+        }
+
+        return (int) $autoseo_attachment_id !== $thumbnail_id;
+    }
+
+    /**
      * Remove the flags that tell later syncs to keep a WordPress edit.
      *
      * @param int $post_id WordPress post ID
@@ -2002,8 +2118,30 @@ class AutoSEO_Publisher {
      */
     private function insert_missing_backlinks($content, $backlinks) {
         $skipped = array();
+        foreach ($this->backlink_target_pairs($backlinks) as $link) {
+            if ($link['anchor'] === '' || $this->content_links_to($content, $link['url'])) {
+                continue;
+            }
+
+            $updated = $this->wrap_anchor_text_once($content, $link['anchor'], $link['url']);
+            if ($updated === null) {
+                $skipped[] = $link['url'];
+                continue;
+            }
+            $content = $updated;
+        }
+
+        return array('content' => $content, 'skipped' => $skipped);
+    }
+
+    /**
+     * @param mixed $backlinks List of url/anchor pairs (arrays or objects)
+     * @return array<int, array{url: string, anchor: string}>
+     */
+    private function backlink_target_pairs($backlinks) {
+        $pairs = array();
         if (!is_array($backlinks)) {
-            return array('content' => $content, 'skipped' => $skipped);
+            return $pairs;
         }
 
         foreach ($backlinks as $link) {
@@ -2017,29 +2155,13 @@ class AutoSEO_Publisher {
                 $anchor = isset($link->anchor) ? (string) $link->anchor : '';
             }
             $url = trim($url);
-            $anchor = trim(wp_strip_all_tags($anchor));
-            if ($url === '' || $anchor === '') {
+            if ($url === '') {
                 continue;
             }
-            if ($this->content_links_to($content, $url)) {
-                continue;
-            }
-
-            $updated = $this->wrap_anchor_text_once($content, $anchor, $url);
-            if ($updated === null) {
-                $encoded_anchor = esc_html($anchor);
-                if ($encoded_anchor !== $anchor) {
-                    $updated = $this->wrap_anchor_text_once($content, $encoded_anchor, $url);
-                }
-            }
-            if ($updated === null) {
-                $skipped[] = $url;
-                continue;
-            }
-            $content = $updated;
+            $pairs[] = array('url' => $url, 'anchor' => trim(wp_strip_all_tags($anchor)));
         }
 
-        return array('content' => $content, 'skipped' => $skipped);
+        return $pairs;
     }
 
     /**
@@ -2065,51 +2187,169 @@ class AutoSEO_Publisher {
     }
 
     /**
-     * Link the first plain-text occurrence of $anchor. Text already inside a
-     * link, a heading, code, or a script is left alone.
+     * Link the first match of $anchor in the readable text. The match ignores
+     * case, extra spaces, curly or encoded quotes, and inline formatting such
+     * as <strong> between words. Text inside a link, a heading, code, a
+     * script, an HTML tag, or a shortcode is left alone.
      *
      * @param string $content Stored HTML
-     * @param string $anchor Anchor text as it appears in the HTML source
+     * @param string $anchor Plain anchor text
      * @param string $url Destination URL
      * @return string|null Updated HTML, or null when the text is not present
      */
     private function wrap_anchor_text_once($content, $anchor, $url) {
-        $parts = preg_split('/(<[^>]+>)/', $content, -1, PREG_SPLIT_DELIM_CAPTURE);
+        $content = (string) $content;
+        $pattern = self::anchor_text_pattern($anchor);
+        if ($pattern === null || !preg_match_all($pattern, $content, $matches, PREG_OFFSET_CAPTURE)) {
+            return null;
+        }
+
+        // Even indexes are text, odd indexes are HTML tags or shortcodes.
+        $parts = preg_split('/(<[^>]+>|\[\/?[a-zA-Z][^\[\]]*\])/', $content, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_OFFSET_CAPTURE);
         if (!is_array($parts)) {
             return null;
         }
 
-        $blocked_tags = array('a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'script', 'style', 'code', 'pre', 'button', 'textarea', 'figcaption');
-        $open = array_fill_keys($blocked_tags, 0);
-        foreach ($parts as $index => $part) {
-            if ($part === '') {
+        foreach ($matches[0] as $match) {
+            $start = $match[1];
+            if (!self::offset_is_linkable_text($parts, $start)) {
                 continue;
             }
-            if ($part[0] === '<') {
-                if (preg_match('/^<(\/?)\s*([a-z0-9]+)\b/i', $part, $tag)) {
+            $range = self::balance_inline_tags($content, $start, $start + strlen($match[0]));
+            if ($range === null) {
+                continue;
+            }
+
+            list($start, $end) = $range;
+            $linked = '<a href="' . esc_url($url) . '">' . substr($content, $start, $end - $start) . '</a>';
+
+            return substr($content, 0, $start) . $linked . substr($content, $end);
+        }
+
+        return null;
+    }
+
+    /**
+     * @param string $anchor Plain anchor text
+     * @return string|null PCRE pattern, or null for an empty anchor
+     */
+    private static function anchor_text_pattern($anchor) {
+        $anchor = trim(html_entity_decode((string) $anchor, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $words = preg_split('/[\s\x{00A0}]+/u', $anchor, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($words) || empty($words)) {
+            return null;
+        }
+
+        $apostrophe = '(?:\'|\x{2018}|\x{2019}|&#0?39;|&#821[67];|&apos;|&[lr]squo;)';
+        $quote = '(?:"|\x{201C}|\x{201D}|&quot;|&#0?34;|&#822[01];|&[lr]dquo;)';
+        $variants = array(
+            "'" => $apostrophe,
+            "\u{2018}" => $apostrophe,
+            "\u{2019}" => $apostrophe,
+            '"' => $quote,
+            "\u{201C}" => $quote,
+            "\u{201D}" => $quote,
+            '&' => '(?:&|&amp;|&#0?38;)',
+            '<' => '(?:<|&lt;)',
+            '>' => '(?:>|&gt;)',
+        );
+
+        $word_patterns = array();
+        foreach ($words as $word) {
+            $chars = preg_split('//u', $word, -1, PREG_SPLIT_NO_EMPTY);
+            if (!is_array($chars)) {
+                return null;
+            }
+            $word_pattern = '';
+            foreach ($chars as $char) {
+                $word_pattern .= isset($variants[$char]) ? $variants[$char] : preg_quote($char, '/');
+            }
+            $word_patterns[] = $word_pattern;
+        }
+
+        $gap = '(?:[\s\x{00A0}]|&nbsp;|&#160;|<\/?(?:strong|b|em|i|u|span|mark|small)\b[^>]*>)+';
+
+        return '/(?<![\p{L}\p{N}])' . implode($gap, $word_patterns) . '(?![\p{L}\p{N}])/iu';
+    }
+
+    /**
+     * True when $offset starts in a text part that is not inside a link,
+     * heading, code, script, or other element a link must not go into.
+     *
+     * @param array $parts preg_split result with offsets, text at even indexes
+     * @param int $offset Byte offset in the content
+     * @return bool
+     */
+    private static function offset_is_linkable_text($parts, $offset) {
+        $blocked_tags = array('a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'script', 'style', 'code', 'pre', 'button', 'textarea', 'figcaption');
+        $open = array_fill_keys($blocked_tags, 0);
+
+        foreach ($parts as $index => $part) {
+            list($text, $part_offset) = $part;
+            if ($part_offset + strlen($text) <= $offset) {
+                if ($index % 2 === 1 && preg_match('/^<(\/?)\s*([a-z0-9]+)\b/i', $text, $tag)) {
                     $name = strtolower($tag[2]);
                     if (isset($open[$name])) {
                         if ($tag[1] === '/') {
                             $open[$name] = max(0, $open[$name] - 1);
-                        } elseif (substr(rtrim($part), -2) !== '/>') {
+                        } elseif (substr(rtrim($text), -2) !== '/>') {
                             $open[$name]++;
                         }
                     }
                 }
                 continue;
             }
-            if (array_sum($open) > 0 || strpos($part, $anchor) === false) {
-                continue;
-            }
 
-            $linked = '<a href="' . esc_url($url) . '">' . $anchor . '</a>';
-            $position = strpos($part, $anchor);
-            $parts[$index] = substr($part, 0, $position) . $linked . substr($part, $position + strlen($anchor));
-
-            return implode('', $parts);
+            return $index % 2 === 0 && array_sum($open) === 0;
         }
 
-        return null;
+        return false;
+    }
+
+    /**
+     * Grow [$start, $end) so the inline tags inside it are balanced, for
+     * example "<strong>partner</strong> page" instead of "partner</strong> page".
+     *
+     * @param string $content Stored HTML
+     * @param int $start Byte offset of the match
+     * @param int $end Byte offset after the match
+     * @return array|null array($start, $end), or null when the tags cross
+     */
+    private static function balance_inline_tags($content, $start, $end) {
+        preg_match_all('/<(\/?)([a-z0-9]+)\b[^>]*>/i', substr($content, $start, $end - $start), $tags, PREG_SET_ORDER);
+
+        $opens = array();
+        $closes = array();
+        foreach ($tags as $tag) {
+            $name = strtolower($tag[2]);
+            if ($tag[1] === '') {
+                $opens[] = $name;
+            } elseif (!empty($opens) && end($opens) === $name) {
+                array_pop($opens);
+            } elseif (empty($opens)) {
+                $closes[] = $name;
+            } else {
+                return null;
+            }
+        }
+
+        foreach ($closes as $name) {
+            $before = substr($content, max(0, $start - 300), min(300, $start));
+            if (!preg_match('/<' . preg_quote($name, '/') . '\b[^>]*>$/i', $before, $opening)) {
+                return null;
+            }
+            $start -= strlen($opening[0]);
+        }
+
+        while (!empty($opens)) {
+            $closing = '</' . array_pop($opens) . '>';
+            if (strncasecmp(substr($content, $end, strlen($closing)), $closing, strlen($closing)) !== 0) {
+                return null;
+            }
+            $end += strlen($closing);
+        }
+
+        return array($start, $end);
     }
 
     /**
@@ -2144,7 +2384,7 @@ class AutoSEO_Publisher {
         }
 
         $state = array(
-            'content' => (bool) get_post_meta($post_id, '_autoseo_manual_content_override', true),
+            'content' => self::wordpress_body_is_owned($post_id),
             'title' => (bool) get_post_meta($post_id, '_autoseo_manual_title_override', true),
             'tags' => (bool) get_post_meta($post_id, '_autoseo_manual_tags_override', true),
         );

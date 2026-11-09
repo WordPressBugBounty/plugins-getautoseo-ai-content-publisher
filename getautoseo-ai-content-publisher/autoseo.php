@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.118
+ * Version: 1.3.122
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.118');
+define('AUTOSEO_VERSION', '1.3.122');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -216,8 +216,10 @@ class AutoSEO_Plugin {
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-notifications.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-rendered-content.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-sitemap.php';
+        require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-plugin-updater.php';
 
         // Initialize classes
+        AutoSEO_Plugin_Updater::init();
         new AutoSEO_Admin();
         new AutoSEO_API();
         new AutoSEO_Publisher();
@@ -3600,6 +3602,25 @@ class AutoSEO_Plugin {
             return new WP_Error('post_not_found', 'WordPress post ' . $post_id . ' not found', array('status' => 404));
         }
 
+        // For hero images, never replace a featured image the customer set
+        // unless this request is an explicit AutoSEO replace.
+        if ($image_type === 'hero' && empty($params['replace_featured_image']) && AutoSEO_Publisher::user_replaced_featured_image($post_id)) {
+            $thumbnail_id = get_post_thumbnail_id($post_id);
+            $this->log_debug(sprintf(
+                'Push image: kept the featured image the user set on post %d (attachment %d)',
+                $post_id,
+                $thumbnail_id
+            ));
+            return rest_ensure_response(array(
+                'success' => true,
+                'skipped' => true,
+                'reason' => 'featured_image_kept',
+                'attachment_id' => intval($thumbnail_id),
+                'post_id' => intval($post_id),
+                'image_type' => $image_type,
+            ));
+        }
+
         // For hero images, skip if the post already has a valid featured image with the same URL
         // AND the thumbnail was actually set by AutoSEO (verified via _autoseo_hero_attachment_id)
         if ($image_type === 'hero' && has_post_thumbnail($post_id)) {
@@ -4510,7 +4531,7 @@ class AutoSEO_Plugin {
             $api->send_webhook('wordpress_content_edited', array(
                 'article_id' => $article_id,
                 'wordpress_post_id' => $post_id,
-                'content' => (bool) get_post_meta($post_id, '_autoseo_manual_content_override', true),
+                'content' => AutoSEO_Publisher::wordpress_body_is_owned($post_id),
                 'title' => (bool) get_post_meta($post_id, '_autoseo_manual_title_override', true),
                 'tags' => (bool) get_post_meta($post_id, '_autoseo_manual_tags_override', true),
             ), false);

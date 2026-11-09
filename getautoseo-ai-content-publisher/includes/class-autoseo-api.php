@@ -842,8 +842,7 @@ class AutoSEO_API {
 
                         $force_content_update = !empty($article['force_content_update']);
                         $replace_wordpress_body = !empty($article['replace_wordpress_body']);
-                        $wordpress_body_owned = (bool) get_post_meta($wp_post->ID, '_autoseo_manual_content_override', true)
-                            || AutoSEO_Publisher::has_page_builder_content($wp_post->ID);
+                        $wordpress_body_owned = AutoSEO_Publisher::wordpress_body_is_owned($wp_post->ID);
 
                         // Older syncs can leave markdown/plain text in post_content while the
                         // API now sends proper HTML with paragraph tags. Re-push when the

@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.122
+ * Version: 1.3.124
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.122');
+define('AUTOSEO_VERSION', '1.3.124');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -131,6 +131,9 @@ class AutoSEO_Plugin {
         add_action('wp_ajax_autoseo_save_settings', array($this, 'ajax_save_settings'));
         add_action('wp_ajax_autoseo_save_post_category', array($this, 'ajax_save_post_category'));
         add_action('wp_ajax_autoseo_test_connection', array($this, 'ajax_test_connection'));
+        // A saved key change must restart the fast sync clock. The clock is
+        // set once at first setup and otherwise stays on the hourly schedule.
+        add_action('update_option_autoseo_api_key', array($this, 'refresh_sync_after_api_key_change'), 10, 2);
         add_action('wp_ajax_autoseo_sync_articles', array($this, 'ajax_sync_articles'));
         add_action('wp_ajax_autoseo_publish_article', array($this, 'ajax_publish_article'));
         add_action('wp_ajax_autoseo_toggle_debug', array($this, 'ajax_toggle_debug'));
@@ -210,6 +213,7 @@ class AutoSEO_Plugin {
     private function load_dependencies() {
         // Load admin classes
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-admin.php';
+        require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-api-key.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-api.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-publisher.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-scheduler.php';
@@ -2655,7 +2659,13 @@ class AutoSEO_Plugin {
             wp_die(esc_html__('Insufficient permissions', 'getautoseo-ai-content-publisher'));
         }
 
+        $saved_key = get_option('autoseo_api_key', '');
+        $posted_key = isset($_POST['api_key']) ? sanitize_text_field(wp_unslash($_POST['api_key'])) : '';
+        // Test the key in the box. The option is still the previous key until Save.
+        $test_key = AutoSEO_Api_Key::key_for_connection_test($posted_key, $saved_key);
+
         $api = new AutoSEO_API();
+        $api->set_api_key($test_key);
         $result = $api->test_connection();
 
         if (is_wp_error($result)) {
@@ -2669,17 +2679,56 @@ class AutoSEO_Plugin {
 
         AutoSEO_Scheduler::clear_sync_error();
 
-        if (!get_option('autoseo_api_key_set_time')) {
+        $key_was_replaced = AutoSEO_Api_Key::replaces_saved_key($test_key, $saved_key);
+        if ($key_was_replaced) {
+            // Saving fires update_option_autoseo_api_key, which restarts sync.
+            update_option('autoseo_api_key', $test_key);
+        } else {
+            $this->schedule_fast_sync(false);
+        }
+
+        $message = $result['message'] ?? __('Connection successful', 'getautoseo-ai-content-publisher');
+        if ($key_was_replaced) {
+            $message = __('Connection successful! This API key is saved.', 'getautoseo-ai-content-publisher');
+        }
+
+        wp_send_json_success(array(
+            'message' => $message,
+            'saved' => $key_was_replaced,
+            'next_sync' => wp_next_scheduled('autoseo_auto_sync'),
+        ));
+    }
+
+    /**
+     * A replaced API key must sync within a minute, not on the hourly clock.
+     *
+     * @param mixed $old_value
+     * @param mixed $new_value
+     */
+    public function refresh_sync_after_api_key_change($old_value, $new_value) {
+        if (!AutoSEO_Api_Key::replaces_saved_key($new_value, $old_value)) {
+            return;
+        }
+
+        $this->schedule_fast_sync(true);
+    }
+
+    /**
+     * Run article sync every minute and start the next run now.
+     *
+     * @param bool $reset_clock True when the API key itself changed.
+     */
+    private function schedule_fast_sync($reset_clock) {
+        if ($reset_clock || !get_option('autoseo_api_key_set_time')) {
             update_option('autoseo_api_key_set_time', time());
         }
 
         wp_clear_scheduled_hook('autoseo_auto_sync');
         wp_schedule_event(time(), 'every_minute', 'autoseo_auto_sync');
 
-        wp_send_json_success(array(
-            'message' => $result['message'] ?? __('Connection successful', 'getautoseo-ai-content-publisher'),
-            'next_sync' => wp_next_scheduled('autoseo_auto_sync'),
-        ));
+        if (function_exists('spawn_cron')) {
+            spawn_cron();
+        }
     }
 
     public function ajax_sync_articles() {

@@ -36,6 +36,15 @@ class AutoSEO_API {
     }
 
     /**
+     * Use a key from the settings box instead of the saved option.
+     *
+     * @param string $api_key
+     */
+    public function set_api_key($api_key) {
+        $this->api_key = is_string($api_key) ? $api_key : '';
+    }
+
+    /**
      * Check if the autoseo_articles table supports utf8mb4 (4-byte Unicode like emoji).
      * Caches the result per request.
      */

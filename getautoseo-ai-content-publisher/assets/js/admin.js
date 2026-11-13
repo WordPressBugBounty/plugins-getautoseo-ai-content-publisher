@@ -189,6 +189,19 @@
         },
 
         /**
+         * API key currently typed on the settings page.
+         * An empty string means "use the saved key".
+         */
+        connectionTestApiKey: function() {
+            const field = document.getElementById('autoseo-settings-api-key');
+            if (!field || typeof field.value !== 'string') {
+                return '';
+            }
+
+            return field.value.trim();
+        },
+
+        /**
          * Test API connection
          */
         testConnection: function(e) {
@@ -204,7 +217,8 @@
                 type: 'POST',
                 data: {
                     action: 'autoseo_test_connection',
-                    nonce: autoseo_ajax.nonce
+                    nonce: autoseo_ajax.nonce,
+                    api_key: AutoSEO_Admin.connectionTestApiKey()
                 },
                 success: function(response) {
                     if (response.success) {
@@ -637,7 +651,8 @@
 
                 const ajaxData = {
                     action: 'autoseo_test_connection',
-                    nonce: autoseo_ajax.nonce
+                    nonce: autoseo_ajax.nonce,
+                    api_key: AutoSEO_Admin.connectionTestApiKey()
                 };
 
                 AutoSEO_Admin.debug.info('📡 Settings: Sending test connection AJAX request:', ajaxData);

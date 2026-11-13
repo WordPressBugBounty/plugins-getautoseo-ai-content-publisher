@@ -67,13 +67,20 @@
  * Key Takeaways and Table of Contents — structural fixes only.
  * Visual styling belongs to the active theme so dark and custom designs are
  * never replaced by AutoSEO backgrounds, borders, padding, or spacing.
+ *
+ * Do not set width or max-width on these blocks or their headings.
+ * Block themes constrain each direct child of .is-layout-constrained with
+ * max-width: var(--wp--style--global--content-size) and auto side margins.
+ * That rule is inside :where(), so its specificity is (0, 1, 0). A width or
+ * max-width here (0, 2, 0) or on the headings (0, 3, 1) wins and stretches
+ * the two blocks to the full entry width, out of the centered column.
+ * writing-mode and display stay at this specificity so vertical-text themes
+ * still render these sections as normal horizontal blocks.
  */
 .autoseo .key-takeaways,
 .autoseo .table-of-contents {
     writing-mode: horizontal-tb;
     display: block;
-    width: 100%;
-    max-width: 100%;
     clear: both;
 }
 
@@ -83,7 +90,6 @@
 .autoseo .table-of-contents h3 {
     writing-mode: horizontal-tb;
     display: block;
-    width: 100%;
 }
 
 .autoseo .key-takeaways ul,

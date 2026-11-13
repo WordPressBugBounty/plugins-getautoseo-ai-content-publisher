@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.122
+Stable tag: 1.3.124
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,13 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.124 =
+* Test API Connection checks the key in the box, then saves that key when the test works. You do not have to click Save Settings first.
+* A new API key starts article sync again right away. The plugin does not wait up to an hour after you replace a key.
+
+= 1.3.123 =
+* Key takeaways and the table of contents now stay in the same column as the rest of the article. On block themes such as Blocksy, those two blocks no longer stretch to the full width of the page.
 
 = 1.3.122 =
 * Backlinks now reach articles you edited in WordPress more often. The link text is found even when its case, spacing, quotes, or bold and italic formatting changed.

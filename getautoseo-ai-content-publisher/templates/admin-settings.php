@@ -38,19 +38,20 @@ if (!defined('ABSPATH')) {
                         <th scope="row"><?php esc_html_e('API Key', 'getautoseo-ai-content-publisher'); ?></th>
                         <td>
                             <input type="text"
+                                   id="autoseo-settings-api-key"
                                    name="autoseo_api_key"
                                    value="<?php echo esc_attr(get_option('autoseo_api_key')); ?>"
                                    class="regular-text"
                                    placeholder="<?php esc_html_e('Your AutoSEO API Key', 'getautoseo-ai-content-publisher'); ?>" />
                             <p class="description">
-                                <?php esc_html_e('Get your API key from your AutoSEO dashboard.', 'getautoseo-ai-content-publisher'); ?>
+                                <?php esc_html_e('Get your API key from your AutoSEO dashboard. Click Test API Connection to check the key in this box. A key that works is saved for you.', 'getautoseo-ai-content-publisher'); ?>
                             </p>
                         </td>
                     </tr>
                 </table>
 
                 <div class="autoseo-connection-test">
-                    <button type="button" id="test-api-connection" class="button button-secondary">
+                    <button type="button" id="test-api-connection" class="button button-secondary" style="cursor: pointer;">
                         <?php esc_html_e('Test API Connection', 'getautoseo-ai-content-publisher'); ?>
                     </button>
                     <span id="connection-status"></span>

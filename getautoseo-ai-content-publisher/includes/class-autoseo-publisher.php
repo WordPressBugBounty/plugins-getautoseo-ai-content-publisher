@@ -10,6 +10,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once __DIR__ . '/class-autoseo-infographic-image.php';
+
 class AutoSEO_Publisher {
 
     private static $batch_mode = false;
@@ -547,7 +549,8 @@ class AutoSEO_Publisher {
                 $article->infographic_image_url,
                 $article->title . ' - Infographic',
                 $post_id,
-                $article->title
+                $article->title,
+                true
             );
             
             if ($infographic_image_id) {
@@ -712,12 +715,16 @@ class AutoSEO_Publisher {
             $infographic_alt = $post->post_title;
         }
 
-        $infographic_html = wp_get_attachment_image(
-            $infographic_image_id,
-            'full',
-            false,
-            $this->get_infographic_image_attributes($infographic_alt)
-        );
+        $infographic_html = AutoSEO_Infographic_Image::image_tag_for_attachment($infographic_image_id, $infographic_alt);
+        if ($infographic_html === '') {
+            $fallback = wp_get_attachment_image(
+                $infographic_image_id,
+                'full',
+                false,
+                $this->get_infographic_image_attributes($infographic_alt)
+            );
+            $infographic_html = $fallback ? AutoSEO_Infographic_Image::retarget_img_tag($fallback) : '';
+        }
 
         if (empty($infographic_html)) {
             return;
@@ -955,7 +962,7 @@ class AutoSEO_Publisher {
      * @param int|null $post_id Post ID to attach to (optional)
      * @return int|false Attachment ID or false on failure
      */
-    private function download_and_attach_image($image_url, $title = '', $post_id = null, $alt_text = '') {
+    private function download_and_attach_image($image_url, $title = '', $post_id = null, $alt_text = '', $preserve_full_resolution = false) {
         if (empty($image_url)) {
             return false;
         }
@@ -991,8 +998,15 @@ class AutoSEO_Publisher {
             return false;
         }
 
-        // Upload the image to WordPress media library
-        $attachment_id = media_handle_sideload($file_array, $post_id, $title);
+        // Upload the image to WordPress media library.
+        // Infographics pass $preserve_full_resolution so a tall file is not
+        // replaced by the 2560px "-scaled" copy. Hero images do not.
+        $sideload = function () use ($file_array, $post_id, $title) {
+            return media_handle_sideload($file_array, $post_id, $title);
+        };
+        $attachment_id = $preserve_full_resolution
+            ? AutoSEO_Infographic_Image::without_big_image_scaling($sideload)
+            : $sideload();
 
         // Check for handle sideload errors
         if (is_wp_error($attachment_id)) {
@@ -1599,7 +1613,8 @@ class AutoSEO_Publisher {
                 $article->infographic_image_url,
                 $article->title . ' - Infographic',
                 $existing_post->ID,
-                $article->title
+                $article->title,
+                true
             );
             
             if ($infographic_image_id) {

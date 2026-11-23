@@ -3,7 +3,7 @@
  * Plugin Name: GetAutoSEO AI Tool
  * Plugin URI: https://getautoseo.com
  * Description: Automate your SEO content creation and publishing with AI-powered tools. Generate high-quality articles, optimize for search engines, and publish directly to your WordPress site.
- * Version: 1.3.124
+ * Version: 1.3.125
  * Author: GetAutoSEO Team
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('AUTOSEO_VERSION', '1.3.124');
+define('AUTOSEO_VERSION', '1.3.125');
 define('AUTOSEO_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AUTOSEO_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('AUTOSEO_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -215,6 +215,7 @@ class AutoSEO_Plugin {
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-admin.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-api-key.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-api.php';
+        require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-infographic-image.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-publisher.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-scheduler.php';
         require_once AUTOSEO_PLUGIN_DIR . 'includes/class-autoseo-notifications.php';
@@ -3731,7 +3732,17 @@ class AutoSEO_Plugin {
             return new WP_Error('attachment_failed', $attachment_id->get_error_message(), array('status' => 500));
         }
 
-        $attach_data = wp_generate_attachment_metadata($attachment_id, $uploaded_file['file']);
+        // Infographics are tall. WordPress would shrink them to 2560px on the
+        // long side and themes would then stretch that copy. Hero images stay
+        // on the normal WordPress size path.
+        $generate_metadata = function () use ($attachment_id, $uploaded_file) {
+            return wp_generate_attachment_metadata($attachment_id, $uploaded_file['file']);
+        };
+        if ($image_type === 'infographic') {
+            $attach_data = AutoSEO_Infographic_Image::without_big_image_scaling($generate_metadata);
+        } else {
+            $attach_data = $generate_metadata();
+        }
         wp_update_attachment_metadata($attachment_id, $attach_data);
 
         // Set alt text on the attachment using post title
@@ -5077,13 +5088,9 @@ class AutoSEO_Plugin {
             $infographic_alt = get_the_title($post->ID);
         }
 
-        // Get the full image HTML
-        $infographic_html = wp_get_attachment_image(
-            $infographic_image_id,
-            'full',
-            false,
-            $this->get_infographic_image_attributes($infographic_alt)
-        );
+        // Full-resolution file. The "full" size is the WordPress "-scaled" copy
+        // on older uploads, and that copy is what looked blurry.
+        $infographic_html = $this->infographic_image_html($infographic_image_id, $infographic_alt);
 
         if (!$infographic_html) {
             return $content;
@@ -5114,39 +5121,45 @@ class AutoSEO_Plugin {
     }
 
     /**
-     * Replace older baked infographic image markup with lazy-load-safe markup.
+     * Replace older baked infographic image markup with the full-resolution file.
+     * Runs for posts that already have the image in the content, including
+     * posts whose stored HTML still points at the WordPress "-scaled" copy.
      */
     private function normalize_infographic_image_markup($content, $post_id) {
         $infographic_image_id = $post_id ? get_post_meta($post_id, '_autoseo_infographic_image_id', true) : 0;
-        if (empty($infographic_image_id)) {
-            return $content;
+        $infographic_html = '';
+
+        if (!empty($infographic_image_id)) {
+            $infographic_alt = get_post_meta($infographic_image_id, '_wp_attachment_image_alt', true);
+            if (empty($infographic_alt)) {
+                $infographic_alt = get_the_title($post_id);
+            }
+            $infographic_html = $this->infographic_image_html($infographic_image_id, $infographic_alt);
         }
 
-        $infographic_alt = get_post_meta($infographic_image_id, '_wp_attachment_image_alt', true);
-        if (empty($infographic_alt)) {
-            $infographic_alt = get_the_title($post_id);
+        return AutoSEO_Infographic_Image::prepare_content($content, $infographic_html);
+    }
+
+    /**
+     * Infographic img tag that uses the original file, not the scaled copy.
+     */
+    private function infographic_image_html($attachment_id, $alt_text) {
+        $html = AutoSEO_Infographic_Image::image_tag_for_attachment($attachment_id, $alt_text);
+        if ($html !== '') {
+            return $html;
         }
 
-        $infographic_html = wp_get_attachment_image(
-            $infographic_image_id,
+        $html = wp_get_attachment_image(
+            $attachment_id,
             'full',
             false,
-            $this->get_infographic_image_attributes($infographic_alt)
+            $this->get_infographic_image_attributes($alt_text)
         );
-
-        if (empty($infographic_html)) {
-            return $content;
+        if (empty($html)) {
+            return '';
         }
 
-        $replacement = '<div class="autoseo-infographic-container">' . $infographic_html . '</div>';
-        $updated = preg_replace(
-            '/<div class="autoseo-infographic-container">\s*<img\b[^>]*>\s*<\/div>/is',
-            $replacement,
-            $content,
-            1
-        );
-
-        return $updated ?: $content;
+        return AutoSEO_Infographic_Image::retarget_img_tag($html);
     }
 
     private function insert_block_at_preferred_article_position($content, $block) {

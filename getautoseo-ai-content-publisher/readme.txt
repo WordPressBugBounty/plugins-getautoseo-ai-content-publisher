@@ -4,7 +4,7 @@ Tags: seo, ai, content, automation, articles
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.124
+Stable tag: 1.3.125
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -111,6 +111,9 @@ Yes, all communication with the AutoSEO API uses secure HTTPS connections and au
 4. Article Preview - Review content before publishing
 
 == Changelog ==
+
+= 1.3.125 =
+* Infographics in your articles stay sharp. A tall infographic is no longer shrunk and then stretched on the page. Articles you already published use the full image too.
 
 = 1.3.124 =
 * Test API Connection checks the key in the box, then saves that key when the test works. You do not have to click Save Settings first.
